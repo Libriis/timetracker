@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Play, Pause, Plus, Trash2, Edit2, Download, X, Check, Clock, BarChart3, List, Settings, RefreshCw, FolderOpen, Building2, TrendingUp } from 'lucide-react';
+import { Play, Pause, Square, Plus, Trash2, Edit2, Download, X, Check, Clock, BarChart3, List, Settings, RefreshCw, FolderOpen, Building2, TrendingUp } from 'lucide-react';
 import { writeTextFile, readDir, mkdir, exists, remove, BaseDirectory } from '@tauri-apps/plugin-fs';
 import { appDataDir, join } from '@tauri-apps/api/path';
 import { revealItemInDir } from '@tauri-apps/plugin-opener';
@@ -226,11 +226,15 @@ export default function TimeTracker() {
         if (e?.value) setEntries(JSON.parse(e.value));
         if (at?.value) {
           const tt = JSON.parse(at.value);
-          setActiveTimer(tt);
-          setSelectedClient(tt.client);
-          setSelectedTask(tt.task);
-          setProject(tt.project || '');
-          setNote(tt.note || '');
+          // Migrate older timers that only had startedAt (no pause tracking).
+          const norm = (tt.runningSince === undefined && tt.accumulatedMs === undefined)
+            ? { ...tt, runningSince: tt.startedAt, accumulatedMs: 0 }
+            : tt;
+          setActiveTimer(norm);
+          setSelectedClient(norm.client);
+          setSelectedTask(norm.task);
+          setProject(norm.project || '');
+          setNote(norm.note || '');
         }
       } catch (err) { console.error(err); }
       finally { setLoading(false); }
@@ -238,13 +242,12 @@ export default function TimeTracker() {
   }, []);
 
   useEffect(() => {
-    if (activeTimer) {
-      const tick = () => setElapsed(Date.now() - activeTimer.startedAt);
-      tick();
-      intervalRef.current = setInterval(tick, 1000);
+    if (!activeTimer) { setElapsed(0); return; }
+    const compute = () => (activeTimer.accumulatedMs || 0) + (activeTimer.runningSince ? Date.now() - activeTimer.runningSince : 0);
+    setElapsed(compute());
+    if (activeTimer.runningSince) {
+      intervalRef.current = setInterval(() => setElapsed(compute()), 1000);
       return () => clearInterval(intervalRef.current);
-    } else {
-      setElapsed(0);
     }
   }, [activeTimer]);
 
@@ -266,9 +269,9 @@ export default function TimeTracker() {
     return () => { if (unlisten) unlisten(); };
   }, []);
 
-  // While a timer runs, watch system idle time and offer to subtract away-from-keyboard time.
+  // While a timer runs (and isn't paused), watch system idle time and offer to subtract away time.
   useEffect(() => {
-    if (!IS_TAURI || !activeTimer) return;
+    if (!IS_TAURI || !activeTimer || !activeTimer.runningSince) return;
     let prev = 0;
     let cancelled = false;
     const poll = async () => {
@@ -283,9 +286,9 @@ export default function TimeTracker() {
             message: `Your computer was idle for about ${mins} minute${mins === 1 ? '' : 's'} while the timer was running. Subtract that idle time from this session?`,
             confirmLabel: 'Subtract idle', cancelLabel: 'Keep it',
             onConfirm: () => setActiveTimer(t => {
-              if (!t) return t;
-              const newStart = Math.min(t.startedAt + awayS * 1000, Date.now());
-              const nt = { ...t, startedAt: newStart };
+              if (!t || !t.runningSince) return t;
+              const newRunning = Math.min(t.runningSince + awayS * 1000, Date.now());
+              const nt = { ...t, runningSince: newRunning };
               window.storage.set('tracker:activeTimer', JSON.stringify(nt)).catch(() => {});
               return nt;
             }),
@@ -349,24 +352,37 @@ export default function TimeTracker() {
     else window.storage.delete('tracker:activeTimer').catch(e => console.error(e));
   };
 
+  // Worked time so far: completed (un-paused) segments + the segment running right now.
+  const timerElapsed = (t) => (t.accumulatedMs || 0) + (t.runningSince ? Date.now() - t.runningSince : 0);
+
   const startTimer = () => {
-    saveActiveTimer({ client: selectedClient, task: selectedTask, project, note, startedAt: Date.now() });
+    const now = Date.now();
+    saveActiveTimer({ client: selectedClient, task: selectedTask, project, note, startedAt: now, runningSince: now, accumulatedMs: 0 });
   };
   // Continue an earlier piece of work: start a fresh session pre-filled from an entry.
   const resumeWork = (work) => {
     if (activeTimer) { pushToast('Stop the current timer before continuing another task.', 'err'); return; }
+    const now = Date.now();
     setSelectedClient(work.client);
     setSelectedTask(work.task);
     setProject(work.project || '');
     setNote(work.note || '');
-    saveActiveTimer({ client: work.client, task: work.task, project: work.project || '', note: work.note || '', startedAt: Date.now() });
+    saveActiveTimer({ client: work.client, task: work.task, project: work.project || '', note: work.note || '', startedAt: now, runningSince: now, accumulatedMs: 0 });
     pushToast(`Resumed: ${work.client} · ${work.task}${work.project ? ' · ' + work.project : ''}`, 'ok');
+  };
+  const pauseTimer = () => {
+    if (!activeTimer || !activeTimer.runningSince) return;
+    saveActiveTimer({ ...activeTimer, accumulatedMs: timerElapsed(activeTimer), runningSince: null });
+  };
+  const resumeTimer = () => {
+    if (!activeTimer || activeTimer.runningSince) return;
+    saveActiveTimer({ ...activeTimer, runningSince: Date.now() });
   };
   const stopTimer = () => {
     if (!activeTimer) return;
     const end = Date.now();
-    const duration = end - activeTimer.startedAt;
-    if (duration < 1000) { saveActiveTimer(null); return; }
+    const duration = timerElapsed(activeTimer);
+    if (duration < 1000) { saveActiveTimer(null); setProject(''); setNote(''); return; }
     const entry = {
       id: 'e_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
       client: activeTimer.client, task: activeTimer.task, project: activeTimer.project || '', note: activeTimer.note || '',
@@ -632,18 +648,30 @@ export default function TimeTracker() {
             <div>
               <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
                 <div>
-                  <div className="text-xs uppercase tracking-wider text-slate-500 mb-1">Currently tracking</div>
+                  <div className="flex items-center gap-2 mb-1">
+                    <div className="text-xs uppercase tracking-wider text-slate-500">{activeTimer.runningSince ? 'Currently tracking' : 'Paused'}</div>
+                    {!activeTimer.runningSince && <span className="text-[10px] uppercase tracking-wider bg-slate-700 text-slate-300 px-1.5 py-0.5 rounded">on hold</span>}
+                  </div>
                   <div className="text-lg font-medium">{activeTimer.client}{activeTimer.project && <span className="text-slate-400 font-normal"> · {activeTimer.project}</span>}</div>
                   <div className="text-sm text-slate-400">{activeTimer.task}{activeTimer.note && ` — ${activeTimer.note}`}</div>
                 </div>
-                <div className="flex items-center gap-4">
-                  <div className={`font-mono text-3xl md:text-4xl tabular-nums ${elapsed >= LONG_TIMER_WARN_MS ? 'text-red-400' : 'text-amber-400'}`}>{formatDuration(elapsed)}</div>
-                  <button onClick={stopTimer} className="flex items-center gap-2 bg-red-600 hover:bg-red-500 text-white font-medium px-5 py-3 rounded-xl transition">
-                    <Pause className="w-5 h-5" /> Stop
+                <div className="flex items-center gap-3">
+                  <div className={`font-mono text-3xl md:text-4xl tabular-nums ${!activeTimer.runningSince ? 'text-slate-500' : elapsed >= LONG_TIMER_WARN_MS ? 'text-red-400' : 'text-amber-400'}`}>{formatDuration(elapsed)}</div>
+                  {activeTimer.runningSince ? (
+                    <button onClick={pauseTimer} title="Pause (breaks aren't counted)" className="flex items-center gap-2 bg-slate-700 hover:bg-slate-600 text-white font-medium px-4 py-3 rounded-xl transition">
+                      <Pause className="w-5 h-5" /> Pause
+                    </button>
+                  ) : (
+                    <button onClick={resumeTimer} title="Resume tracking" className="flex items-center gap-2 bg-amber-600 hover:bg-amber-500 text-white font-medium px-4 py-3 rounded-xl transition">
+                      <Play className="w-5 h-5" /> Resume
+                    </button>
+                  )}
+                  <button onClick={stopTimer} title="Stop and save this session" className="flex items-center gap-2 bg-red-600 hover:bg-red-500 text-white font-medium px-4 py-3 rounded-xl transition">
+                    <Square className="w-5 h-5" /> Stop
                   </button>
                 </div>
               </div>
-              {elapsed >= LONG_TIMER_WARN_MS && (
+              {activeTimer.runningSince && elapsed >= LONG_TIMER_WARN_MS && (
                 <div className="mt-4 flex items-center gap-2 text-xs bg-amber-600/10 border border-amber-700/40 text-amber-300 rounded-lg px-3 py-2">
                   This timer has been running for {formatHours(elapsed)} — did you forget to stop it?
                 </div>
