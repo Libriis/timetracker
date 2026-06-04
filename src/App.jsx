@@ -60,6 +60,22 @@ const DEFAULT_CLIENT_VAT = {};
 const DEFAULT_ROUNDING = 15;
 const LONG_TIMER_WARN_MS = 8 * 3600000; // warn if a running timer exceeds 8 hours
 const IDLE_THRESHOLD_S = 600; // offer to subtract idle time after 10 minutes away
+
+// Normalise a stored timer to the current shape (id + pause tracking). Migrates older
+// single-timer records that only had `startedAt`.
+function normalizeTimer(tt) {
+  const legacy = tt.runningSince === undefined && tt.accumulatedMs === undefined;
+  return {
+    id: tt.id || ('t_' + (tt.startedAt || Date.now()) + '_' + Math.random().toString(36).slice(2, 6)),
+    client: tt.client,
+    task: tt.task,
+    project: tt.project || '',
+    note: tt.note || '',
+    startedAt: tt.startedAt,
+    runningSince: legacy ? tt.startedAt : (tt.runningSince ?? null),
+    accumulatedMs: tt.accumulatedMs || 0,
+  };
+}
 const DEFAULT_CLIENT_ROUNDING = {};
 const DEFAULT_DESCRIPTIONS = {
   en: {
@@ -174,8 +190,8 @@ export default function TimeTracker() {
   const [entries, setEntries] = useState(SEED_ENTRIES);
   const [loading, setLoading] = useState(true);
 
-  const [activeTimer, setActiveTimer] = useState(null);
-  const [elapsed, setElapsed] = useState(0);
+  const [activeTimers, setActiveTimers] = useState([]); // multiple concurrent timers
+  const [now, setNow] = useState(Date.now());
 
   const [selectedClient, setSelectedClient] = useState(DEFAULT_CLIENTS[0]);
   const [selectedTask, setSelectedTask] = useState(DEFAULT_TASKS[0]);
@@ -202,9 +218,9 @@ export default function TimeTracker() {
   useEffect(() => {
     (async () => {
       try {
-        const keys = ['clients', 'tasks', 'rates', 'clientRates', 'vat', 'clientVat', 'rounding', 'clientRounding', 'descriptions', 'issuer', 'csvFormat', 'entries', 'activeTimer'];
+        const keys = ['clients', 'tasks', 'rates', 'clientRates', 'vat', 'clientVat', 'rounding', 'clientRounding', 'descriptions', 'issuer', 'csvFormat', 'entries', 'activeTimer', 'activeTimers'];
         const results = await Promise.all(keys.map(k => window.storage.get('tracker:' + k).catch(() => null)));
-        const [c, t, r, cr, v, cv, rd, crd, dsc, iss, csvf, e, at] = results;
+        const [c, t, r, cr, v, cv, rd, crd, dsc, iss, csvf, e, at, ats] = results;
         if (c?.value) setClients(JSON.parse(c.value));
         if (t?.value) setTasks(JSON.parse(t.value));
         if (r?.value) setRates(JSON.parse(r.value));
@@ -224,17 +240,11 @@ export default function TimeTracker() {
         if (iss?.value) setIssuer({ ...DEFAULT_ISSUER, ...JSON.parse(iss.value) });
         if (csvf?.value) setCsvFormat(JSON.parse(csvf.value));
         if (e?.value) setEntries(JSON.parse(e.value));
-        if (at?.value) {
-          const tt = JSON.parse(at.value);
-          // Migrate older timers that only had startedAt (no pause tracking).
-          const norm = (tt.runningSince === undefined && tt.accumulatedMs === undefined)
-            ? { ...tt, runningSince: tt.startedAt, accumulatedMs: 0 }
-            : tt;
-          setActiveTimer(norm);
-          setSelectedClient(norm.client);
-          setSelectedTask(norm.task);
-          setProject(norm.project || '');
-          setNote(norm.note || '');
+        // Restore running timers: prefer the new array, fall back to a single legacy timer.
+        if (ats?.value) {
+          try { setActiveTimers(JSON.parse(ats.value).map(normalizeTimer)); } catch (e2) { console.error(e2); }
+        } else if (at?.value) {
+          try { setActiveTimers([normalizeTimer(JSON.parse(at.value))]); } catch (e2) { console.error(e2); }
         }
       } catch (err) { console.error(err); }
       finally { setLoading(false); }
@@ -242,14 +252,11 @@ export default function TimeTracker() {
   }, []);
 
   useEffect(() => {
-    if (!activeTimer) { setElapsed(0); return; }
-    const compute = () => (activeTimer.accumulatedMs || 0) + (activeTimer.runningSince ? Date.now() - activeTimer.runningSince : 0);
-    setElapsed(compute());
-    if (activeTimer.runningSince) {
-      intervalRef.current = setInterval(() => setElapsed(compute()), 1000);
-      return () => clearInterval(intervalRef.current);
-    }
-  }, [activeTimer]);
+    if (!activeTimers.some(t => t.runningSince)) return;
+    setNow(Date.now());
+    intervalRef.current = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(intervalRef.current);
+  }, [activeTimers]);
 
   // Debounced mirror of the full dataset to disk (Tauri only) — survives a cleared in-app store.
   useEffect(() => {
@@ -269,9 +276,9 @@ export default function TimeTracker() {
     return () => { if (unlisten) unlisten(); };
   }, []);
 
-  // While a timer runs (and isn't paused), watch system idle time and offer to subtract away time.
+  // While at least one timer runs, watch system idle time and offer to subtract away time from all running timers.
   useEffect(() => {
-    if (!IS_TAURI || !activeTimer || !activeTimer.runningSince) return;
+    if (!IS_TAURI || !activeTimers.some(t => t.runningSince)) return;
     let prev = 0;
     let cancelled = false;
     const poll = async () => {
@@ -283,14 +290,12 @@ export default function TimeTracker() {
           const mins = Math.max(1, Math.round(awayS / 60));
           requestConfirm({
             title: 'Away from keyboard?',
-            message: `Your computer was idle for about ${mins} minute${mins === 1 ? '' : 's'} while the timer was running. Subtract that idle time from this session?`,
+            message: `Your computer was idle for about ${mins} minute${mins === 1 ? '' : 's'} while tracking. Subtract that idle time from the running timer(s)?`,
             confirmLabel: 'Subtract idle', cancelLabel: 'Keep it',
-            onConfirm: () => setActiveTimer(t => {
-              if (!t || !t.runningSince) return t;
-              const newRunning = Math.min(t.runningSince + awayS * 1000, Date.now());
-              const nt = { ...t, runningSince: newRunning };
-              window.storage.set('tracker:activeTimer', JSON.stringify(nt)).catch(() => {});
-              return nt;
+            onConfirm: () => setActiveTimers(ts => {
+              const next = ts.map(t => t.runningSince ? { ...t, runningSince: Math.min(t.runningSince + awayS * 1000, Date.now()) } : t);
+              window.storage.set('tracker:activeTimers', JSON.stringify(next)).catch(() => {});
+              return next;
             }),
           });
         }
@@ -300,7 +305,7 @@ export default function TimeTracker() {
     const id = setInterval(poll, 20000);
     poll();
     return () => { cancelled = true; clearInterval(id); };
-  }, [activeTimer]);
+  }, [activeTimers]);
 
   // Check for a newer signed release once on startup and offer a one-click install.
   useEffect(() => {
@@ -346,55 +351,52 @@ export default function TimeTracker() {
   const saveIssuer = (n) => saveTo('issuer', n, setIssuer);
   const saveCsvFormat = (n) => saveTo('csvFormat', n, setCsvFormat);
   const saveEntries = (n) => saveTo('entries', n, setEntries);
-  const saveActiveTimer = (t) => {
-    setActiveTimer(t);
-    if (t) window.storage.set('tracker:activeTimer', JSON.stringify(t)).catch(e => console.error(e));
-    else window.storage.delete('tracker:activeTimer').catch(e => console.error(e));
+  const saveActiveTimers = (arr) => {
+    setActiveTimers(arr);
+    if (arr && arr.length) window.storage.set('tracker:activeTimers', JSON.stringify(arr)).catch(e => console.error(e));
+    else window.storage.delete('tracker:activeTimers').catch(e => console.error(e));
   };
 
   // Worked time so far: completed (un-paused) segments + the segment running right now.
   const timerElapsed = (t) => (t.accumulatedMs || 0) + (t.runningSince ? Date.now() - t.runningSince : 0);
+  const newTimerId = () => 't_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6);
 
   const startTimer = () => {
-    const now = Date.now();
-    saveActiveTimer({ client: selectedClient, task: selectedTask, project, note, startedAt: now, runningSince: now, accumulatedMs: 0 });
+    const ts = Date.now();
+    saveActiveTimers([...activeTimers, { id: newTimerId(), client: selectedClient, task: selectedTask, project, note, startedAt: ts, runningSince: ts, accumulatedMs: 0 }]);
+    setNote('');
+    setProject('');
   };
-  // Continue an earlier piece of work: start a fresh session pre-filled from an entry.
+  // Continue an earlier piece of work: start an additional session pre-filled from an entry.
   const resumeWork = (work) => {
-    if (activeTimer) { pushToast('Stop the current timer before continuing another task.', 'err'); return; }
-    const now = Date.now();
-    setSelectedClient(work.client);
-    setSelectedTask(work.task);
-    setProject(work.project || '');
-    setNote(work.note || '');
-    saveActiveTimer({ client: work.client, task: work.task, project: work.project || '', note: work.note || '', startedAt: now, runningSince: now, accumulatedMs: 0 });
-    pushToast(`Resumed: ${work.client} · ${work.task}${work.project ? ' · ' + work.project : ''}`, 'ok');
+    const ts = Date.now();
+    saveActiveTimers([...activeTimers, { id: newTimerId(), client: work.client, task: work.task, project: work.project || '', note: work.note || '', startedAt: ts, runningSince: ts, accumulatedMs: 0 }]);
+    pushToast(`Started: ${work.client} · ${work.task}${work.project ? ' · ' + work.project : ''}`, 'ok');
   };
-  const pauseTimer = () => {
-    if (!activeTimer || !activeTimer.runningSince) return;
-    saveActiveTimer({ ...activeTimer, accumulatedMs: timerElapsed(activeTimer), runningSince: null });
-  };
-  const resumeTimer = () => {
-    if (!activeTimer || activeTimer.runningSince) return;
-    saveActiveTimer({ ...activeTimer, runningSince: Date.now() });
-  };
-  const stopTimer = () => {
-    if (!activeTimer) return;
-    const end = Date.now();
-    const duration = timerElapsed(activeTimer);
-    if (duration < 1000) { saveActiveTimer(null); setProject(''); setNote(''); return; }
+  const pauseTimer = (id) => saveActiveTimers(activeTimers.map(t => (t.id === id && t.runningSince) ? { ...t, accumulatedMs: timerElapsed(t), runningSince: null } : t));
+  const resumeTimer = (id) => saveActiveTimers(activeTimers.map(t => (t.id === id && !t.runningSince) ? { ...t, runningSince: Date.now() } : t));
+  const stopTimer = (id) => {
+    const t = activeTimers.find(x => x.id === id);
+    if (!t) return;
+    const rest = activeTimers.filter(x => x.id !== id);
+    const duration = timerElapsed(t);
+    if (duration < 1000) { saveActiveTimers(rest); return; }
     const entry = {
       id: 'e_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
-      client: activeTimer.client, task: activeTimer.task, project: activeTimer.project || '', note: activeTimer.note || '',
-      start: activeTimer.startedAt, end, duration,
+      client: t.client, task: t.task, project: t.project || '', note: t.note || '',
+      start: t.startedAt, end: Date.now(), duration,
     };
     saveEntries([entry, ...entries]);
-    saveActiveTimer(null);
-    setProject('');
-    setNote('');
+    saveActiveTimers(rest);
   };
-  // Kept current each render so the tray event toggles using the latest state.
-  toggleTimerRef.current = () => { if (activeTimer) stopTimer(); else startTimer(); };
+  // Tray "Start / stop timer": no timers → start one; some running → pause all; all paused → resume all.
+  toggleTimerRef.current = () => {
+    if (activeTimers.length === 0) { startTimer(); return; }
+    const anyRunning = activeTimers.some(t => t.runningSince);
+    saveActiveTimers(activeTimers.map(t => anyRunning
+      ? (t.runningSince ? { ...t, accumulatedMs: timerElapsed(t), runningSince: null } : t)
+      : { ...t, runningSince: Date.now() }));
+  };
   const deleteEntry = (id) => saveEntries(entries.filter(e => e.id !== id));
   const updateEntry = (u) => saveEntries(entries.map(e => e.id === u.id ? u : e));
   const addManualEntry = (entry) => saveEntries([entry, ...entries].sort((a, b) => b.start - a.start));
@@ -644,42 +646,15 @@ export default function TimeTracker() {
         </header>
 
         <section className="bg-slate-900 border border-slate-800 rounded-2xl p-5 mb-6">
-          {activeTimer ? (
-            <div>
-              <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-                <div>
-                  <div className="flex items-center gap-2 mb-1">
-                    <div className="text-xs uppercase tracking-wider text-slate-500">{activeTimer.runningSince ? 'Currently tracking' : 'Paused'}</div>
-                    {!activeTimer.runningSince && <span className="text-[10px] uppercase tracking-wider bg-slate-700 text-slate-300 px-1.5 py-0.5 rounded">on hold</span>}
-                  </div>
-                  <div className="text-lg font-medium">{activeTimer.client}{activeTimer.project && <span className="text-slate-400 font-normal"> · {activeTimer.project}</span>}</div>
-                  <div className="text-sm text-slate-400">{activeTimer.task}{activeTimer.note && ` — ${activeTimer.note}`}</div>
-                </div>
-                <div className="flex items-center gap-3">
-                  <div className={`font-mono text-3xl md:text-4xl tabular-nums ${!activeTimer.runningSince ? 'text-slate-500' : elapsed >= LONG_TIMER_WARN_MS ? 'text-red-400' : 'text-amber-400'}`}>{formatDuration(elapsed)}</div>
-                  {activeTimer.runningSince ? (
-                    <button onClick={pauseTimer} title="Pause (breaks aren't counted)" className="flex items-center gap-2 bg-slate-700 hover:bg-slate-600 text-white font-medium px-4 py-3 rounded-xl transition">
-                      <Pause className="w-5 h-5" /> Pause
-                    </button>
-                  ) : (
-                    <button onClick={resumeTimer} title="Resume tracking" className="flex items-center gap-2 bg-amber-600 hover:bg-amber-500 text-white font-medium px-4 py-3 rounded-xl transition">
-                      <Play className="w-5 h-5" /> Resume
-                    </button>
-                  )}
-                  <button onClick={stopTimer} title="Stop and save this session" className="flex items-center gap-2 bg-red-600 hover:bg-red-500 text-white font-medium px-4 py-3 rounded-xl transition">
-                    <Square className="w-5 h-5" /> Stop
-                  </button>
-                </div>
-              </div>
-              {activeTimer.runningSince && elapsed >= LONG_TIMER_WARN_MS && (
-                <div className="mt-4 flex items-center gap-2 text-xs bg-amber-600/10 border border-amber-700/40 text-amber-300 rounded-lg px-3 py-2">
-                  This timer has been running for {formatHours(elapsed)} — did you forget to stop it?
-                </div>
-              )}
+          {activeTimers.length > 0 && (
+            <div className="space-y-2 mb-5">
+              {activeTimers.map(t => (
+                <ActiveTimerRow key={t.id} timer={t} now={now} onPause={pauseTimer} onResume={resumeTimer} onStop={stopTimer} />
+              ))}
             </div>
-          ) : (
-            <div>
-              <div className="text-xs uppercase tracking-wider text-slate-500 mb-3">Start a new session</div>
+          )}
+          <div>
+              <div className="text-xs uppercase tracking-wider text-slate-500 mb-3">{activeTimers.length > 0 ? 'Start another session' : 'Start a new session'}</div>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 mb-3">
                 <Select label="Client" value={selectedClient} onChange={setSelectedClient} options={clients} />
                 <Select label="Task" value={selectedTask} onChange={setSelectedTask} options={tasks} />
@@ -716,8 +691,7 @@ export default function TimeTracker() {
                   </div>
                 </div>
               )}
-            </div>
-          )}
+          </div>
         </section>
 
         {view === 'dashboard' && (
@@ -780,6 +754,34 @@ export default function TimeTracker() {
         <ConfirmDialog {...confirmState} onClose={() => setConfirmState(null)} />
       )}
       <ToastStack toasts={toasts} />
+    </div>
+  );
+}
+
+function ActiveTimerRow({ timer, now, onPause, onResume, onStop }) {
+  const running = !!timer.runningSince;
+  const elapsed = (timer.accumulatedMs || 0) + (running ? now - timer.runningSince : 0);
+  const longWarn = running && elapsed >= LONG_TIMER_WARN_MS;
+  return (
+    <div className="bg-slate-950 border border-slate-800 rounded-xl p-3 flex flex-col sm:flex-row sm:items-center gap-3">
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="font-medium text-white truncate">{timer.client}</span>
+          {timer.project && <span className="text-[10px] tracking-wide bg-slate-800 text-slate-300 px-1.5 py-0.5 rounded">{timer.project}</span>}
+          {!running && <span className="text-[10px] uppercase tracking-wider bg-slate-700 text-slate-300 px-1.5 py-0.5 rounded">paused</span>}
+        </div>
+        <div className="text-xs text-slate-400 truncate">{timer.task}{timer.note && ` — ${timer.note}`}</div>
+        {longWarn && <div className="text-[10px] text-amber-400 mt-0.5">Running {formatHours(elapsed)} — forgot to stop?</div>}
+      </div>
+      <div className="flex items-center gap-2 self-end sm:self-auto">
+        <div className={`font-mono text-2xl tabular-nums ${!running ? 'text-slate-500' : longWarn ? 'text-red-400' : 'text-amber-400'}`}>{formatDuration(elapsed)}</div>
+        {running ? (
+          <button onClick={() => onPause(timer.id)} aria-label="Pause" title="Pause (breaks aren't counted)" className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 transition"><Pause className="w-4 h-4" /></button>
+        ) : (
+          <button onClick={() => onResume(timer.id)} aria-label="Resume" title="Resume tracking" className="p-2 rounded-lg bg-amber-600 hover:bg-amber-500 text-white transition"><Play className="w-4 h-4" /></button>
+        )}
+        <button onClick={() => onStop(timer.id)} aria-label="Stop and save" title="Stop and save this session" className="p-2 rounded-lg bg-red-600 hover:bg-red-500 text-white transition"><Square className="w-4 h-4" /></button>
+      </div>
     </div>
   );
 }
