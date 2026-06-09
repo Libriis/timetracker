@@ -244,8 +244,15 @@ export default function TimeTracker() {
         if (ats?.value) {
           try { setActiveTimers(JSON.parse(ats.value).map(normalizeTimer)); } catch (e2) { console.error(e2); }
         } else if (at?.value) {
-          try { setActiveTimers([normalizeTimer(JSON.parse(at.value))]); } catch (e2) { console.error(e2); }
+          try {
+            const migrated = [normalizeTimer(JSON.parse(at.value))];
+            setActiveTimers(migrated);
+            // Persist under the new key so it becomes canonical going forward.
+            window.storage.set('tracker:activeTimers', JSON.stringify(migrated)).catch(() => {});
+          } catch (e2) { console.error(e2); }
         }
+        // The legacy single-timer key is obsolete — remove it so it can never resurrect a stopped timer.
+        if (at?.value) window.storage.delete('tracker:activeTimer').catch(() => {});
       } catch (err) { console.error(err); }
       finally { setLoading(false); }
     })();
@@ -353,6 +360,7 @@ export default function TimeTracker() {
   const saveEntries = (n) => saveTo('entries', n, setEntries);
   const saveActiveTimers = (arr) => {
     setActiveTimers(arr);
+    window.storage.delete('tracker:activeTimer').catch(() => {}); // obsolete legacy key — keep it gone
     if (arr && arr.length) window.storage.set('tracker:activeTimers', JSON.stringify(arr)).catch(e => console.error(e));
     else window.storage.delete('tracker:activeTimers').catch(e => console.error(e));
   };
