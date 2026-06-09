@@ -1104,25 +1104,38 @@ function Log({ entries, clients, rates, clientRates, vat, clientVat, rounding, c
   const [fClient, setFClient] = useState('all');
   const [fProject, setFProject] = useState('all');
   const [fPeriod, setFPeriod] = useState('all');
+  const [fFrom, setFFrom] = useState('');
+  const [fTo, setFTo] = useState('');
   const [search, setSearch] = useState('');
 
   if (entries.length === 0) {
     return <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 text-center text-slate-500">No entries yet. Start a timer or add a manual entry.</div>;
   }
 
+  const selectPeriod = (p) => {
+    setFPeriod(p);
+    if (p === 'custom' && !fFrom && !fTo) {
+      const d = new Date(); d.setDate(d.getDate() - 30);
+      setFFrom(d.toISOString().slice(0, 10));
+      setFTo(new Date().toISOString().slice(0, 10));
+    }
+  };
   const periodFrom = () => {
     const now = new Date();
     if (fPeriod === 'week') { const d = new Date(now); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); d.setHours(0, 0, 0, 0); return d.getTime(); }
     if (fPeriod === 'month') return new Date(now.getFullYear(), now.getMonth(), 1).getTime();
     if (fPeriod === 'year') return new Date(now.getFullYear(), 0, 1).getTime();
+    if (fPeriod === 'custom' && fFrom) return new Date(fFrom + 'T00:00:00').getTime();
     return 0;
   };
+  const periodTo = () => (fPeriod === 'custom' && fTo) ? new Date(fTo + 'T23:59:59.999').getTime() : Infinity;
   const q = search.trim().toLowerCase();
   const from = periodFrom();
+  const to = periodTo();
   const filtered = entries.filter(e => {
     if (fClient !== 'all' && e.client !== fClient) return false;
     if (fProject !== 'all' && (e.project || '') !== fProject) return false;
-    if (e.start < from) return false;
+    if (e.start < from || e.start > to) return false;
     if (q && !`${e.client} ${e.task} ${e.project || ''} ${e.note || ''}`.toLowerCase().includes(q)) return false;
     return true;
   });
@@ -1132,10 +1145,25 @@ function Log({ entries, clients, rates, clientRates, vat, clientVat, rounding, c
     const parts = [];
     if (fClient !== 'all') parts.push(fClient.replace(/[^a-z0-9]+/gi, '-').toLowerCase());
     if (fProject !== 'all') parts.push(fProject.replace(/[^a-z0-9]+/gi, '-').toLowerCase());
-    if (fPeriod !== 'all') parts.push(fPeriod);
+    if (fPeriod === 'custom') parts.push(`${fFrom || 'start'}_${fTo || 'end'}`);
+    else if (fPeriod !== 'all') parts.push(fPeriod);
     if (q) parts.push('search');
     return parts.join('-');
   };
+
+  // Totals for the current filter (the amount to invoice).
+  const sums = filtered.reduce((a, e) => {
+    const net = calcEarnings(e, rates, clientRates, rounding, clientRounding);
+    const v = getVat(e.client, vat, clientVat);
+    a.ms += e.duration;
+    a.billableMs += e.free ? 0 : roundedDuration(e.duration, getRounding(e.client, rounding, clientRounding));
+    a.net += net;
+    a.vat += net * v / 100;
+    if (e.free) a.freeCount += 1;
+    return a;
+  }, { ms: 0, billableMs: 0, net: 0, vat: 0, freeCount: 0 });
+  const netTotal = round2(sums.net);
+  const grossTotal = round2(netTotal + round2(sums.vat));
 
   const grouped = {};
   filtered.forEach(e => {
@@ -1158,12 +1186,13 @@ function Log({ entries, clients, rates, clientRates, vat, clientVat, rounding, c
             {projectOptions.map(p => <option key={p} value={p}>{p}</option>)}
           </select>
         )}
-        <select value={fPeriod} onChange={(e) => setFPeriod(e.target.value)}
+        <select value={fPeriod} onChange={(e) => selectPeriod(e.target.value)}
           className="bg-slate-900 border border-slate-800 rounded-lg px-3 py-1.5 text-sm">
           <option value="all">All time</option>
           <option value="week">This week</option>
           <option value="month">This month</option>
           <option value="year">This year</option>
+          <option value="custom">Custom range…</option>
         </select>
         <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search notes, task, client…"
           className="flex-1 min-w-0 bg-slate-900 border border-slate-800 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:border-amber-600 placeholder:text-slate-600" />
@@ -1172,6 +1201,39 @@ function Log({ entries, clients, rates, clientRates, vat, clientVat, rounding, c
           <Download className="w-4 h-4" /> Export CSV
         </button>
       </div>
+      {fPeriod === 'custom' && (
+        <div className="flex flex-col sm:flex-row sm:items-end gap-2 mb-3 bg-slate-900 border border-slate-800 rounded-xl p-3">
+          <div className="flex-1">
+            <label className="block text-xs text-slate-500 mb-1">From</label>
+            <input type="date" value={fFrom} max={fTo || undefined} onChange={(e) => setFFrom(e.target.value)}
+              className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:border-amber-600" />
+          </div>
+          <div className="flex-1">
+            <label className="block text-xs text-slate-500 mb-1">To</label>
+            <input type="date" value={fTo} min={fFrom || undefined} onChange={(e) => setFTo(e.target.value)}
+              className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:border-amber-600" />
+          </div>
+          <div className="flex gap-1.5 flex-wrap">
+            <QuickRangeBtn label="Last 7 days" onClick={() => { const d = new Date(); d.setDate(d.getDate() - 6); setFFrom(d.toISOString().slice(0, 10)); setFTo(new Date().toISOString().slice(0, 10)); }} />
+            <QuickRangeBtn label="Last 30 days" onClick={() => { const d = new Date(); d.setDate(d.getDate() - 29); setFFrom(d.toISOString().slice(0, 10)); setFTo(new Date().toISOString().slice(0, 10)); }} />
+            <QuickRangeBtn label="Last month" onClick={() => { const n = new Date(); const f = new Date(n.getFullYear(), n.getMonth() - 1, 1); const l = new Date(n.getFullYear(), n.getMonth(), 0); setFFrom(f.toISOString().slice(0, 10)); setFTo(l.toISOString().slice(0, 10)); }} />
+          </div>
+        </div>
+      )}
+      {filtered.length > 0 && (
+        <div className="bg-slate-900 border border-amber-700/40 rounded-2xl p-4 mb-4 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-x-6 gap-y-1 text-sm">
+            <div><span className="text-slate-500">Entries </span><span className="text-slate-200 font-medium">{filtered.length}</span></div>
+            <div><span className="text-slate-500">Tracked </span><span className="text-slate-200 font-medium">{formatHours(sums.ms)}</span>{sums.billableMs !== sums.ms && <span className="text-slate-500"> · {formatHours(sums.billableMs)} billable</span>}</div>
+            <div><span className="text-slate-500">Net </span><span className="text-slate-200 font-medium">{formatEUR(netTotal)}</span></div>
+            {sums.freeCount > 0 && <div className="text-emerald-400/80 text-xs">{sums.freeCount} free</div>}
+          </div>
+          <div className="text-right">
+            <div className="text-[10px] uppercase tracking-wider text-amber-400 font-semibold">To invoice (incl. VAT)</div>
+            <div className="font-mono text-2xl text-amber-400">{formatEUR(grossTotal)}</div>
+          </div>
+        </div>
+      )}
       {filtered.length === 0 ? (
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 text-center text-slate-500">No entries match the current filter.</div>
       ) : (
