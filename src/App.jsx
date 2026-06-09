@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { Play, Pause, Square, Plus, Trash2, Edit2, Download, X, Check, Clock, BarChart3, List, Settings, RefreshCw, FolderOpen, Building2, TrendingUp } from 'lucide-react';
 import { writeTextFile, readDir, mkdir, exists, remove, BaseDirectory } from '@tauri-apps/plugin-fs';
 import { appDataDir, join } from '@tauri-apps/api/path';
@@ -8,6 +8,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { getVersion } from '@tauri-apps/api/app';
 import { check } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
+import { round2, getRate, getVat, getRounding, roundedDuration, calcEarnings, calcStandardValue, timerElapsed, normalizeTimer, buildInvoiceLines } from './lib/billing.js';
 
 const IS_TAURI = typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window);
 
@@ -60,22 +61,8 @@ const DEFAULT_CLIENT_VAT = {};
 const DEFAULT_ROUNDING = 15;
 const LONG_TIMER_WARN_MS = 8 * 3600000; // warn if a running timer exceeds 8 hours
 const IDLE_THRESHOLD_S = 600; // offer to subtract idle time after 10 minutes away
+const SCHEMA_VERSION = 2; // bump when the storage shape changes; gives a hook for migrations
 
-// Normalise a stored timer to the current shape (id + pause tracking). Migrates older
-// single-timer records that only had `startedAt`.
-function normalizeTimer(tt) {
-  const legacy = tt.runningSince === undefined && tt.accumulatedMs === undefined;
-  return {
-    id: tt.id || ('t_' + (tt.startedAt || Date.now()) + '_' + Math.random().toString(36).slice(2, 6)),
-    client: tt.client,
-    task: tt.task,
-    project: tt.project || '',
-    note: tt.note || '',
-    startedAt: tt.startedAt,
-    runningSince: legacy ? tt.startedAt : (tt.runningSince ?? null),
-    accumulatedMs: tt.accumulatedMs || 0,
-  };
-}
 const DEFAULT_CLIENT_ROUNDING = {};
 const DEFAULT_DESCRIPTIONS = {
   en: {
@@ -100,46 +87,7 @@ const DEFAULT_ISSUER = { name: '', address: '', regId: '', taxId: '', vatId: '',
 // No seeded entries — the log starts empty on a fresh install.
 const SEED_ENTRIES = [];
 
-// ---------- helpers ----------
-function getRate(client, task, rates, clientRates) {
-  const o = clientRates?.[client]?.[task];
-  if (o != null && !isNaN(o)) return o;
-  return rates[task] || 0;
-}
-function getVat(client, defaultVat, clientVat) {
-  const o = clientVat?.[client];
-  if (o != null && !isNaN(o)) return o;
-  return defaultVat;
-}
-function getRounding(client, defaultRounding, clientRounding) {
-  const o = clientRounding?.[client];
-  if (o != null && !isNaN(o)) return o;
-  return defaultRounding;
-}
-function roundedDuration(durationMs, roundingMinutes) {
-  if (!roundingMinutes || roundingMinutes <= 0) return durationMs;
-  const blockMs = roundingMinutes * 60000;
-  return Math.ceil(durationMs / blockMs) * blockMs;
-}
-// Round monetary amounts to whole cents so line items always add up to the total on an invoice.
-function round2(n) {
-  return Math.round((n + Number.EPSILON) * 100) / 100;
-}
-function calcEarnings(entry, rates, clientRates, defaultRounding, clientRounding) {
-  if (entry.free) return 0;
-  const rate = getRate(entry.client, entry.task, rates, clientRates);
-  const r = defaultRounding != null ? getRounding(entry.client, defaultRounding, clientRounding || {}) : 0;
-  const billableMs = roundedDuration(entry.duration, r);
-  return round2((billableMs / 3600000) * rate);
-}
-
-function calcStandardValue(entry, rates, clientRates, defaultRounding, clientRounding) {
-  // What the entry would have cost if not free
-  const rate = getRate(entry.client, entry.task, rates, clientRates);
-  const r = defaultRounding != null ? getRounding(entry.client, defaultRounding, clientRounding || {}) : 0;
-  const billableMs = roundedDuration(entry.duration, r);
-  return round2((billableMs / 3600000) * rate);
-}
+// ---------- formatting helpers ----------
 function formatEUR(amount) {
   if (!amount) return '€0';
   if (amount < 1) return `€${amount.toFixed(2)}`;
@@ -191,7 +139,6 @@ export default function TimeTracker() {
   const [loading, setLoading] = useState(true);
 
   const [activeTimers, setActiveTimers] = useState([]); // multiple concurrent timers
-  const [now, setNow] = useState(Date.now());
 
   const [selectedClient, setSelectedClient] = useState(DEFAULT_CLIENTS[0]);
   const [selectedTask, setSelectedTask] = useState(DEFAULT_TASKS[0]);
@@ -210,60 +157,58 @@ export default function TimeTracker() {
   const [toasts, setToasts] = useState([]);
   const [confirmState, setConfirmState] = useState(null);
 
-  const intervalRef = useRef(null);
   const toggleTimerRef = useRef(() => {});
   const backupRef = useRef(null);
 
   // Load
   useEffect(() => {
     (async () => {
+      // Parse one stored value defensively — a single corrupt/incompatible key must not block the rest.
+      const parse = (res) => {
+        try { return res?.value != null ? JSON.parse(res.value) : undefined; }
+        catch (e2) { console.error('Skipped corrupt storage value', e2); return undefined; }
+      };
+      const isObj = (x) => x && typeof x === 'object' && !Array.isArray(x);
       try {
         const keys = ['clients', 'tasks', 'rates', 'clientRates', 'vat', 'clientVat', 'rounding', 'clientRounding', 'descriptions', 'issuer', 'csvFormat', 'entries', 'activeTimer', 'activeTimers'];
         const results = await Promise.all(keys.map(k => window.storage.get('tracker:' + k).catch(() => null)));
         const [c, t, r, cr, v, cv, rd, crd, dsc, iss, csvf, e, at, ats] = results;
-        if (c?.value) setClients(JSON.parse(c.value));
-        if (t?.value) setTasks(JSON.parse(t.value));
-        if (r?.value) setRates(JSON.parse(r.value));
-        if (cr?.value) setClientRates(JSON.parse(cr.value));
-        if (v?.value) setVat(JSON.parse(v.value));
-        if (cv?.value) setClientVat(JSON.parse(cv.value));
-        if (rd?.value) setRounding(JSON.parse(rd.value));
-        if (crd?.value) setClientRounding(JSON.parse(crd.value));
-        if (dsc?.value) {
-          const stored = JSON.parse(dsc.value);
-          // Merge defaults with stored — defaults provide fallback for tasks not yet edited
-          setDescriptions({
-            en: { ...DEFAULT_DESCRIPTIONS.en, ...(stored.en || {}) },
-            sk: { ...DEFAULT_DESCRIPTIONS.sk, ...(stored.sk || {}) },
-          });
-        }
-        if (iss?.value) setIssuer({ ...DEFAULT_ISSUER, ...JSON.parse(iss.value) });
-        if (csvf?.value) setCsvFormat(JSON.parse(csvf.value));
-        if (e?.value) setEntries(JSON.parse(e.value));
+
+        const cV = parse(c); if (Array.isArray(cV)) setClients(cV);
+        const tV = parse(t); if (Array.isArray(tV)) setTasks(tV);
+        const rV = parse(r); if (isObj(rV)) setRates(rV);
+        const crV = parse(cr); if (isObj(crV)) setClientRates(crV);
+        const vV = parse(v); if (Number.isFinite(vV)) setVat(vV);
+        const cvV = parse(cv); if (isObj(cvV)) setClientVat(cvV);
+        const rdV = parse(rd); if (Number.isFinite(rdV)) setRounding(rdV);
+        const crdV = parse(crd); if (isObj(crdV)) setClientRounding(crdV);
+        const dscV = parse(dsc);
+        if (isObj(dscV)) setDescriptions({
+          en: { ...DEFAULT_DESCRIPTIONS.en, ...(dscV.en || {}) },
+          sk: { ...DEFAULT_DESCRIPTIONS.sk, ...(dscV.sk || {}) },
+        });
+        const issV = parse(iss); if (isObj(issV)) setIssuer({ ...DEFAULT_ISSUER, ...issV });
+        const csvfV = parse(csvf); if (csvfV === 'standard' || csvfV === 'excel-sk') setCsvFormat(csvfV);
+        const eV = parse(e); if (Array.isArray(eV)) setEntries(eV);
+
         // Restore running timers: prefer the new array, fall back to a single legacy timer.
-        if (ats?.value) {
-          try { setActiveTimers(JSON.parse(ats.value).map(normalizeTimer)); } catch (e2) { console.error(e2); }
-        } else if (at?.value) {
-          try {
-            const migrated = [normalizeTimer(JSON.parse(at.value))];
-            setActiveTimers(migrated);
-            // Persist under the new key so it becomes canonical going forward.
-            window.storage.set('tracker:activeTimers', JSON.stringify(migrated)).catch(() => {});
-          } catch (e2) { console.error(e2); }
+        const atsV = parse(ats);
+        const atV = parse(at);
+        if (Array.isArray(atsV)) {
+          setActiveTimers(atsV.map(normalizeTimer));
+        } else if (isObj(atV)) {
+          const migrated = [normalizeTimer(atV)];
+          setActiveTimers(migrated);
+          window.storage.set('tracker:activeTimers', JSON.stringify(migrated)).catch(() => {});
         }
         // The legacy single-timer key is obsolete — remove it so it can never resurrect a stopped timer.
         if (at?.value) window.storage.delete('tracker:activeTimer').catch(() => {});
+        // Stamp the schema version (hook for future migrations).
+        window.storage.set('tracker:schemaVersion', JSON.stringify(SCHEMA_VERSION)).catch(() => {});
       } catch (err) { console.error(err); }
       finally { setLoading(false); }
     })();
   }, []);
-
-  useEffect(() => {
-    if (!activeTimers.some(t => t.runningSince)) return;
-    setNow(Date.now());
-    intervalRef.current = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(intervalRef.current);
-  }, [activeTimers]);
 
   // Debounced mirror of the full dataset to disk (Tauri only) — survives a cleared in-app store.
   useEffect(() => {
@@ -365,8 +310,6 @@ export default function TimeTracker() {
     else window.storage.delete('tracker:activeTimers').catch(e => console.error(e));
   };
 
-  // Worked time so far: completed (un-paused) segments + the segment running right now.
-  const timerElapsed = (t) => (t.accumulatedMs || 0) + (t.runningSince ? Date.now() - t.runningSince : 0);
   const newTimerId = () => 't_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6);
 
   const startTimer = () => {
@@ -446,17 +389,19 @@ export default function TimeTracker() {
     return Infinity;
   };
 
-  const filteredEntries = entries.filter(e => {
-    if (e.start < periodStart()) return false;
-    if (e.start > periodEnd()) return false;
-    if (filterClient !== 'all' && e.client !== filterClient) return false;
-    return true;
-  });
+  const filteredEntries = useMemo(() => {
+    const start = periodStart();
+    const end = periodEnd();
+    return entries.filter(e => e.start >= start && e.start <= end && (filterClient === 'all' || e.client === filterClient));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entries, period, customStart, customEnd, filterClient]);
 
-  const projectSuggestions = Array.from(new Set(entries.map(e => e.project).filter(Boolean)));
+  const projectSuggestions = useMemo(
+    () => Array.from(new Set(entries.map(e => e.project).filter(Boolean))),
+    [entries]);
 
   // Most recent distinct pieces of work (client+task+project+note) for one-click continuation.
-  const recentWork = (() => {
+  const recentWork = useMemo(() => {
     const seen = new Set(); const out = [];
     [...entries].sort((a, b) => b.start - a.start).forEach(e => {
       const key = `${e.client}|${e.task}|${e.project || ''}|${e.note || ''}`;
@@ -465,41 +410,43 @@ export default function TimeTracker() {
       out.push(e);
     });
     return out.slice(0, 5);
-  })();
+  }, [entries]);
 
-  const totalMs = filteredEntries.reduce((s, e) => s + e.duration, 0);
-  // Billable time excludes complimentary (free) work, so it matches the billed earnings and the PDF report.
-  const totalBillableMs = filteredEntries.reduce((s, e) => e.free ? s : s + roundedDuration(e.duration, getRounding(e.client, rounding, clientRounding)), 0);
-  const totalEarnings = filteredEntries.reduce((s, e) => s + calcEarnings(e, rates, clientRates, rounding, clientRounding), 0);
-  const totalComplimentary = filteredEntries.reduce((s, e) => e.free ? s + calcStandardValue(e, rates, clientRates, rounding, clientRounding) : s, 0);
-  const complimentaryCount = filteredEntries.filter(e => e.free).length;
-
-  const byClient = {};
-  filteredEntries.forEach(e => {
-    if (!byClient[e.client]) {
-      byClient[e.client] = {
-        total: 0, billable: 0, earnings: 0,
-        complimentary: 0, complimentaryCount: 0,
-        vat: getVat(e.client, vat, clientVat),
-        rounding: getRounding(e.client, rounding, clientRounding),
-        byTask: {},
-      };
-    }
-    const earned = calcEarnings(e, rates, clientRates, rounding, clientRounding);
-    const billableMs = e.free ? 0 : roundedDuration(e.duration, byClient[e.client].rounding);
-    byClient[e.client].total += e.duration;
-    byClient[e.client].billable += billableMs;
-    byClient[e.client].earnings += earned;
-    if (e.free) {
-      byClient[e.client].complimentary += calcStandardValue(e, rates, clientRates, rounding, clientRounding);
-      byClient[e.client].complimentaryCount += 1;
-    }
-    if (!byClient[e.client].byTask[e.task]) byClient[e.client].byTask[e.task] = { ms: 0, billable: 0, earnings: 0 };
-    byClient[e.client].byTask[e.task].ms += e.duration;
-    byClient[e.client].byTask[e.task].billable += billableMs;
-    byClient[e.client].byTask[e.task].earnings += earned;
-  });
-  const totalGross = round2(Object.values(byClient).reduce((s, c) => s + c.earnings + round2(c.earnings * c.vat / 100), 0));
+  const { totalMs, totalBillableMs, totalEarnings, totalComplimentary, complimentaryCount, byClient, totalGross } = useMemo(() => {
+    const totalMs = filteredEntries.reduce((s, e) => s + e.duration, 0);
+    // Billable time excludes complimentary (free) work, so it matches the billed earnings and the PDF report.
+    const totalBillableMs = filteredEntries.reduce((s, e) => e.free ? s : s + roundedDuration(e.duration, getRounding(e.client, rounding, clientRounding)), 0);
+    const totalEarnings = filteredEntries.reduce((s, e) => s + calcEarnings(e, rates, clientRates, rounding, clientRounding), 0);
+    const totalComplimentary = filteredEntries.reduce((s, e) => e.free ? s + calcStandardValue(e, rates, clientRates, rounding, clientRounding) : s, 0);
+    const complimentaryCount = filteredEntries.filter(e => e.free).length;
+    const byClient = {};
+    filteredEntries.forEach(e => {
+      if (!byClient[e.client]) {
+        byClient[e.client] = {
+          total: 0, billable: 0, earnings: 0,
+          complimentary: 0, complimentaryCount: 0,
+          vat: getVat(e.client, vat, clientVat),
+          rounding: getRounding(e.client, rounding, clientRounding),
+          byTask: {},
+        };
+      }
+      const earned = calcEarnings(e, rates, clientRates, rounding, clientRounding);
+      const billableMs = e.free ? 0 : roundedDuration(e.duration, byClient[e.client].rounding);
+      byClient[e.client].total += e.duration;
+      byClient[e.client].billable += billableMs;
+      byClient[e.client].earnings += earned;
+      if (e.free) {
+        byClient[e.client].complimentary += calcStandardValue(e, rates, clientRates, rounding, clientRounding);
+        byClient[e.client].complimentaryCount += 1;
+      }
+      if (!byClient[e.client].byTask[e.task]) byClient[e.client].byTask[e.task] = { ms: 0, billable: 0, earnings: 0 };
+      byClient[e.client].byTask[e.task].ms += e.duration;
+      byClient[e.client].byTask[e.task].billable += billableMs;
+      byClient[e.client].byTask[e.task].earnings += earned;
+    });
+    const totalGross = round2(Object.values(byClient).reduce((s, c) => s + c.earnings + round2(c.earnings * c.vat / 100), 0));
+    return { totalMs, totalBillableMs, totalEarnings, totalComplimentary, complimentaryCount, byClient, totalGross };
+  }, [filteredEntries, rates, clientRates, vat, clientVat, rounding, clientRounding]);
 
   const exportCSV = (list, suffix) => {
     const data = Array.isArray(list) ? list : entries;
@@ -662,11 +609,7 @@ export default function TimeTracker() {
 
         <section className="bg-slate-900 border border-slate-800 rounded-2xl p-5 mb-6">
           {activeTimers.length > 0 && (
-            <div className="space-y-2 mb-5">
-              {activeTimers.map(t => (
-                <ActiveTimerRow key={t.id} timer={t} now={now} onPause={pauseTimer} onResume={resumeTimer} onStop={stopTimer} />
-              ))}
-            </div>
+            <ActiveTimersPanel timers={activeTimers} onPause={pauseTimer} onResume={resumeTimer} onStop={stopTimer} />
           )}
           <div>
               <div className="text-xs uppercase tracking-wider text-slate-500 mb-3">{activeTimers.length > 0 ? 'Start another session' : 'Start a new session'}</div>
@@ -770,6 +713,25 @@ export default function TimeTracker() {
         <ConfirmDialog {...confirmState} onClose={() => setConfirmState(null)} />
       )}
       <ToastStack toasts={toasts} />
+    </div>
+  );
+}
+
+// Owns the 1-second clock so only the timer rows re-render each second, not the whole app.
+function ActiveTimersPanel({ timers, onPause, onResume, onStop }) {
+  const [now, setNow] = useState(Date.now());
+  const anyRunning = timers.some(t => t.runningSince);
+  useEffect(() => {
+    if (!anyRunning) return;
+    setNow(Date.now());
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [anyRunning]);
+  return (
+    <div className="space-y-2 mb-5">
+      {timers.map(t => (
+        <ActiveTimerRow key={t.id} timer={t} now={now} onPause={onPause} onResume={onResume} onStop={onStop} />
+      ))}
     </div>
   );
 }
@@ -1114,37 +1076,6 @@ function InsightsView({ entries, rates, clientRates, rounding, clientRounding })
       )}
     </div>
   );
-}
-
-// Aggregate entries into invoice line items grouped by client + project + task.
-function buildInvoiceLines(entries, cfg) {
-  const { rates, clientRates, vat, clientVat, rounding, clientRounding, includeFree } = cfg;
-  const multiClient = new Set(entries.map(e => e.client)).size > 1;
-  const map = new Map();
-  for (const e of entries) {
-    if (e.free && !includeFree) continue;
-    const key = `${e.client}|||${e.project || ''}|||${e.task}|||${e.free ? 'F' : 'B'}`;
-    let g = map.get(key);
-    if (!g) {
-      g = { client: e.client, project: e.project || '', task: e.task, free: !!e.free, billableMs: 0,
-        rate: getRate(e.client, e.task, rates, clientRates), vatPct: getVat(e.client, vat, clientVat) };
-      map.set(key, g);
-    }
-    g.billableMs += roundedDuration(e.duration, getRounding(e.client, rounding, clientRounding));
-  }
-  const lines = [...map.values()].map(g => {
-    const hours = g.billableMs / 3600000;
-    const net = g.free ? 0 : round2(hours * g.rate);
-    const vatAmt = round2(net * g.vatPct / 100);
-    return {
-      desc: `${multiClient ? g.client + ' — ' : ''}${g.project ? g.project + ' — ' : ''}${g.task}${g.free ? ' (complimentary)' : ''}`,
-      client: g.client, project: g.project, task: g.task, free: g.free,
-      hours, rate: g.free ? 0 : g.rate, vatPct: g.vatPct, net, vatAmt, gross: round2(net + vatAmt),
-    };
-  }).sort((a, b) => a.client.localeCompare(b.client) || a.project.localeCompare(b.project) || a.task.localeCompare(b.task));
-  const totalNet = round2(lines.reduce((s, l) => s + l.net, 0));
-  const totalVat = round2(lines.reduce((s, l) => s + l.vatAmt, 0));
-  return { lines, totalNet, totalVat, totalGross: round2(totalNet + totalVat), totalHours: lines.reduce((s, l) => s + l.hours, 0) };
 }
 
 function InvoiceLinesModal({ entries, rates, clientRates, vat, clientVat, rounding, clientRounding, csvFormat, onClose }) {
