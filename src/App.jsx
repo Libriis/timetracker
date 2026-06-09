@@ -711,7 +711,7 @@ export default function TimeTracker() {
         {view === 'log' && (
           <Log entries={entries} clients={clients} rates={rates} clientRates={clientRates}
             vat={vat} clientVat={clientVat}
-            rounding={rounding} clientRounding={clientRounding}
+            rounding={rounding} clientRounding={clientRounding} csvFormat={csvFormat}
             onDelete={confirmDeleteEntry} onEdit={setEditingEntry} onResume={resumeWork} onExport={exportCSV} />
         )}
         {view === 'insights' && (
@@ -1100,13 +1100,138 @@ function InsightsView({ entries, rates, clientRates, rounding, clientRounding })
   );
 }
 
-function Log({ entries, clients, rates, clientRates, vat, clientVat, rounding, clientRounding, onDelete, onEdit, onResume, onExport }) {
+// Aggregate entries into invoice line items grouped by client + project + task.
+function buildInvoiceLines(entries, cfg) {
+  const { rates, clientRates, vat, clientVat, rounding, clientRounding, includeFree } = cfg;
+  const multiClient = new Set(entries.map(e => e.client)).size > 1;
+  const map = new Map();
+  for (const e of entries) {
+    if (e.free && !includeFree) continue;
+    const key = `${e.client}|||${e.project || ''}|||${e.task}|||${e.free ? 'F' : 'B'}`;
+    let g = map.get(key);
+    if (!g) {
+      g = { client: e.client, project: e.project || '', task: e.task, free: !!e.free, billableMs: 0,
+        rate: getRate(e.client, e.task, rates, clientRates), vatPct: getVat(e.client, vat, clientVat) };
+      map.set(key, g);
+    }
+    g.billableMs += roundedDuration(e.duration, getRounding(e.client, rounding, clientRounding));
+  }
+  const lines = [...map.values()].map(g => {
+    const hours = g.billableMs / 3600000;
+    const net = g.free ? 0 : round2(hours * g.rate);
+    const vatAmt = round2(net * g.vatPct / 100);
+    return {
+      desc: `${multiClient ? g.client + ' — ' : ''}${g.project ? g.project + ' — ' : ''}${g.task}${g.free ? ' (complimentary)' : ''}`,
+      client: g.client, project: g.project, task: g.task, free: g.free,
+      hours, rate: g.free ? 0 : g.rate, vatPct: g.vatPct, net, vatAmt, gross: round2(net + vatAmt),
+    };
+  }).sort((a, b) => a.client.localeCompare(b.client) || a.project.localeCompare(b.project) || a.task.localeCompare(b.task));
+  const totalNet = round2(lines.reduce((s, l) => s + l.net, 0));
+  const totalVat = round2(lines.reduce((s, l) => s + l.vatAmt, 0));
+  return { lines, totalNet, totalVat, totalGross: round2(totalNet + totalVat), totalHours: lines.reduce((s, l) => s + l.hours, 0) };
+}
+
+function InvoiceLinesModal({ entries, rates, clientRates, vat, clientVat, rounding, clientRounding, csvFormat, onClose }) {
+  const [includeFree, setIncludeFree] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const taRef = useRef(null);
+  const excel = csvFormat === 'excel-sk';
+  const dec = (n, dp = 2) => { const s = Number(n).toFixed(dp); return excel ? s.replace('.', ',') : s; };
+  const { lines, totalNet, totalVat, totalGross, totalHours } = buildInvoiceLines(entries, { rates, clientRates, vat, clientVat, rounding, clientRounding, includeFree });
+
+  const header = ['Description', 'Hours', 'Rate (EUR/h)', 'Net (EUR)', 'VAT %', 'Gross (EUR)'];
+  const rows = lines.map(l => [l.desc, dec(l.hours), dec(l.rate), dec(l.net), String(l.vatPct), dec(l.gross)]);
+  const tsv = [header, ...rows].map(r => r.join('\t')).join('\n');
+
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(tsv); setCopied(true); setTimeout(() => setCopied(false), 2000); return; } catch (e) { /* fall back */ }
+    if (taRef.current) { taRef.current.focus(); taRef.current.select(); try { document.execCommand('copy'); setCopied(true); setTimeout(() => setCopied(false), 2000); } catch (e) { /* manual */ } }
+  };
+  const exportCSV = () => {
+    const sep = excel ? ';' : ',';
+    const body = [header, ...rows].map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(sep)).join('\r\n');
+    const csv = (excel ? 'sep=;\r\n' : '') + body;
+    const blob = new Blob([excel ? '﻿' + csv : csv], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `invoice-lines-${new Date().toISOString().slice(0, 10)}.csv`; a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <Modal title="Invoice lines" onClose={onClose} wide>
+      <div className="text-xs text-slate-500 mb-3">Grouped by project + activity, from the current Log filter. Quantities are billable hours; amounts use your rates and rounding.</div>
+      <div className="overflow-x-auto -mx-1">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-left text-[11px] uppercase tracking-wider text-slate-500 border-b border-slate-800">
+              <th className="py-2 px-1 font-medium">Description</th>
+              <th className="py-2 px-1 font-medium text-right">Hours</th>
+              <th className="py-2 px-1 font-medium text-right">Rate</th>
+              <th className="py-2 px-1 font-medium text-right">Net</th>
+              <th className="py-2 px-1 font-medium text-right">VAT</th>
+              <th className="py-2 px-1 font-medium text-right">Gross</th>
+            </tr>
+          </thead>
+          <tbody>
+            {lines.map((l, i) => (
+              <tr key={i} className="border-b border-slate-800/60">
+                <td className="py-2 px-1 text-slate-200">{l.desc}</td>
+                <td className="py-2 px-1 text-right font-mono text-slate-300 whitespace-nowrap">{dec(l.hours)} h</td>
+                <td className="py-2 px-1 text-right font-mono text-slate-400 whitespace-nowrap">{l.free ? '—' : formatEUR(l.rate)}</td>
+                <td className="py-2 px-1 text-right font-mono text-slate-200 whitespace-nowrap">{formatEUR(l.net)}</td>
+                <td className="py-2 px-1 text-right font-mono text-slate-500 whitespace-nowrap">{l.vatPct}%</td>
+                <td className="py-2 px-1 text-right font-mono text-amber-400 whitespace-nowrap">{formatEUR(l.gross)}</td>
+              </tr>
+            ))}
+            {lines.length === 0 && (
+              <tr><td colSpan={6} className="py-4 text-center text-slate-500">No billable lines for this filter.</td></tr>
+            )}
+          </tbody>
+          {lines.length > 0 && (
+            <tfoot>
+              <tr className="font-semibold">
+                <td className="py-2 px-1 text-slate-300">Total</td>
+                <td className="py-2 px-1 text-right font-mono text-slate-300 whitespace-nowrap">{dec(totalHours)} h</td>
+                <td></td>
+                <td className="py-2 px-1 text-right font-mono text-slate-200 whitespace-nowrap">{formatEUR(totalNet)}</td>
+                <td className="py-2 px-1 text-right font-mono text-slate-500 whitespace-nowrap">{formatEUR(totalVat)}</td>
+                <td className="py-2 px-1 text-right font-mono text-amber-400 whitespace-nowrap">{formatEUR(totalGross)}</td>
+              </tr>
+            </tfoot>
+          )}
+        </table>
+      </div>
+
+      <label className="flex items-center gap-2 mt-3 text-xs text-slate-400 cursor-pointer">
+        <input type="checkbox" checked={includeFree} onChange={(e) => setIncludeFree(e.target.checked)} className="accent-amber-600" />
+        Include complimentary work as €0 lines
+      </label>
+
+      <textarea ref={taRef} readOnly value={tsv} aria-hidden="true" tabIndex={-1}
+        className="absolute opacity-0 pointer-events-none w-px h-px" />
+
+      <div className="flex flex-wrap justify-end gap-2 mt-5">
+        <button onClick={exportCSV} className="flex items-center gap-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 px-4 py-2 rounded-lg text-sm transition">
+          <Download className="w-4 h-4" /> Export CSV
+        </button>
+        <button onClick={copy} disabled={lines.length === 0}
+          className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm transition text-white ${lines.length === 0 ? 'bg-slate-800 text-slate-500 cursor-not-allowed' : 'bg-amber-600 hover:bg-amber-500'}`}>
+          {copied ? <><Check className="w-4 h-4" /> Copied</> : <>Copy for Excel</>}
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+function Log({ entries, clients, rates, clientRates, vat, clientVat, rounding, clientRounding, csvFormat, onDelete, onEdit, onResume, onExport }) {
   const [fClient, setFClient] = useState('all');
   const [fProject, setFProject] = useState('all');
   const [fPeriod, setFPeriod] = useState('all');
   const [fFrom, setFFrom] = useState('');
   const [fTo, setFTo] = useState('');
   const [search, setSearch] = useState('');
+  const [showLines, setShowLines] = useState(false);
 
   if (entries.length === 0) {
     return <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 text-center text-slate-500">No entries yet. Start a timer or add a manual entry.</div>;
@@ -1228,11 +1353,22 @@ function Log({ entries, clients, rates, clientRates, vat, clientVat, rounding, c
             <div><span className="text-slate-500">Net </span><span className="text-slate-200 font-medium">{formatEUR(netTotal)}</span></div>
             {sums.freeCount > 0 && <div className="text-emerald-400/80 text-xs">{sums.freeCount} free</div>}
           </div>
-          <div className="text-right">
-            <div className="text-[10px] uppercase tracking-wider text-amber-400 font-semibold">To invoice (incl. VAT)</div>
-            <div className="font-mono text-2xl text-amber-400">{formatEUR(grossTotal)}</div>
+          <div className="flex items-center gap-4">
+            <button onClick={() => setShowLines(true)}
+              className="flex items-center gap-1.5 bg-amber-600 hover:bg-amber-500 text-white px-3 py-2 rounded-lg text-sm transition whitespace-nowrap">
+              <List className="w-4 h-4" /> Invoice lines
+            </button>
+            <div className="text-right">
+              <div className="text-[10px] uppercase tracking-wider text-amber-400 font-semibold">To invoice (incl. VAT)</div>
+              <div className="font-mono text-2xl text-amber-400">{formatEUR(grossTotal)}</div>
+            </div>
           </div>
         </div>
+      )}
+      {showLines && (
+        <InvoiceLinesModal entries={filtered} rates={rates} clientRates={clientRates}
+          vat={vat} clientVat={clientVat} rounding={rounding} clientRounding={clientRounding}
+          csvFormat={csvFormat} onClose={() => setShowLines(false)} />
       )}
       {filtered.length === 0 ? (
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 text-center text-slate-500">No entries match the current filter.</div>
@@ -2228,7 +2364,7 @@ function ToggleRow({ label, description, checked, onChange }) {
   );
 }
 
-function Modal({ title, children, onClose }) {
+function Modal({ title, children, onClose, wide }) {
   useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', onKey);
@@ -2236,7 +2372,7 @@ function Modal({ title, children, onClose }) {
   }, [onClose]);
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50" onClick={onClose} role="dialog" aria-modal="true" aria-label={title}>
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 w-full max-w-md" onClick={(e) => e.stopPropagation()}>
+      <div className={`bg-slate-900 border border-slate-800 rounded-2xl p-5 w-full ${wide ? 'max-w-3xl' : 'max-w-md'} max-h-[90vh] overflow-y-auto`} onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-4">
           <h2 className="font-medium text-white">{title}</h2>
           <button onClick={onClose} aria-label="Close" className="text-slate-500 hover:text-slate-200"><X className="w-5 h-5" /></button>
