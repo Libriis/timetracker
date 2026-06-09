@@ -400,6 +400,12 @@ export default function TimeTracker() {
   const deleteEntry = (id) => saveEntries(entries.filter(e => e.id !== id));
   const updateEntry = (u) => saveEntries(entries.map(e => e.id === u.id ? u : e));
   const addManualEntry = (entry) => saveEntries([entry, ...entries].sort((a, b) => b.start - a.start));
+  const toggleInvoiced = (entry) => saveEntries(entries.map(e => e.id === entry.id ? { ...e, invoiced: !e.invoiced } : e));
+  const setInvoicedBulk = (list, value) => {
+    const ids = new Set(list.map(e => e.id));
+    saveEntries(entries.map(e => ids.has(e.id) ? { ...e, invoiced: value } : e));
+    pushToast(`Marked ${ids.size} ${ids.size === 1 ? 'entry' : 'entries'} as ${value ? 'invoiced' : 'unbilled'}.`, 'ok');
+  };
 
   const pushToast = (msg, type = 'info') => {
     const id = Date.now() + Math.random();
@@ -493,7 +499,7 @@ export default function TimeTracker() {
     const excel = csvFormat === 'excel-sk';
     const sep = excel ? ';' : ',';
     const num = (n, dp = 2) => { const s = Number(n).toFixed(dp); return excel ? s.replace('.', ',') : s; };
-    const rows = [['Date', 'Client', 'Project', 'Task', 'Note', 'Free', 'Start', 'End', 'Duration (h)', 'Duration (hh:mm:ss)', 'Rounding (min)', 'Billable (h)', 'Rate (€/h)', 'Standard value (€)', 'Earnings net (€)', 'VAT %', 'Earnings with VAT (€)']];
+    const rows = [['Date', 'Client', 'Project', 'Task', 'Note', 'Free', 'Invoiced', 'Start', 'End', 'Duration (h)', 'Duration (hh:mm:ss)', 'Rounding (min)', 'Billable (h)', 'Rate (€/h)', 'Standard value (€)', 'Earnings net (€)', 'VAT %', 'Earnings with VAT (€)']];
     [...data].sort((a, b) => b.start - a.start).forEach(e => {
       const rate = getRate(e.client, e.task, rates, clientRates);
       const r = getRounding(e.client, rounding, clientRounding);
@@ -504,7 +510,7 @@ export default function TimeTracker() {
       const withVat = earnings * (1 + entryVat / 100);
       rows.push([
         new Date(e.start).toISOString().slice(0, 10), e.client, e.project || '', e.task, e.note || '',
-        e.free ? 'YES' : '',
+        e.free ? 'YES' : '', e.invoiced ? 'YES' : '',
         new Date(e.start).toLocaleString(), new Date(e.end).toLocaleString(),
         num(e.duration / 3600000), formatDuration(e.duration),
         String(r), num(billableMs / 3600000),
@@ -600,6 +606,7 @@ export default function TimeTracker() {
         project: typeof e.project === 'string' ? e.project : '',
         note: typeof e.note === 'string' ? e.note : '',
         free: !!e.free,
+        invoiced: !!e.invoiced,
         start: e.start, end: e.end, duration: e.duration,
       }));
     if (validEntries.length === 0 && data.entries.length > 0) throw new Error('No valid entries found in the file.');
@@ -712,7 +719,8 @@ export default function TimeTracker() {
           <Log entries={entries} clients={clients} rates={rates} clientRates={clientRates}
             vat={vat} clientVat={clientVat}
             rounding={rounding} clientRounding={clientRounding} csvFormat={csvFormat}
-            onDelete={confirmDeleteEntry} onEdit={setEditingEntry} onResume={resumeWork} onExport={exportCSV} />
+            onDelete={confirmDeleteEntry} onEdit={setEditingEntry} onResume={resumeWork} onExport={exportCSV}
+            onToggleInvoiced={toggleInvoiced} onBulkInvoiced={setInvoicedBulk} />
         )}
         {view === 'insights' && (
           <InsightsView entries={entries} rates={rates} clientRates={clientRates}
@@ -1224,12 +1232,13 @@ function InvoiceLinesModal({ entries, rates, clientRates, vat, clientVat, roundi
   );
 }
 
-function Log({ entries, clients, rates, clientRates, vat, clientVat, rounding, clientRounding, csvFormat, onDelete, onEdit, onResume, onExport }) {
+function Log({ entries, clients, rates, clientRates, vat, clientVat, rounding, clientRounding, csvFormat, onDelete, onEdit, onResume, onExport, onToggleInvoiced, onBulkInvoiced }) {
   const [fClient, setFClient] = useState('all');
   const [fProject, setFProject] = useState('all');
   const [fPeriod, setFPeriod] = useState('all');
   const [fFrom, setFFrom] = useState('');
   const [fTo, setFTo] = useState('');
+  const [fBilled, setFBilled] = useState('all'); // all | unbilled | invoiced
   const [search, setSearch] = useState('');
   const [showLines, setShowLines] = useState(false);
 
@@ -1260,6 +1269,8 @@ function Log({ entries, clients, rates, clientRates, vat, clientVat, rounding, c
   const filtered = entries.filter(e => {
     if (fClient !== 'all' && e.client !== fClient) return false;
     if (fProject !== 'all' && (e.project || '') !== fProject) return false;
+    if (fBilled === 'unbilled' && e.invoiced) return false;
+    if (fBilled === 'invoiced' && !e.invoiced) return false;
     if (e.start < from || e.start > to) return false;
     if (q && !`${e.client} ${e.task} ${e.project || ''} ${e.note || ''}`.toLowerCase().includes(q)) return false;
     return true;
@@ -1272,9 +1283,11 @@ function Log({ entries, clients, rates, clientRates, vat, clientVat, rounding, c
     if (fProject !== 'all') parts.push(fProject.replace(/[^a-z0-9]+/gi, '-').toLowerCase());
     if (fPeriod === 'custom') parts.push(`${fFrom || 'start'}_${fTo || 'end'}`);
     else if (fPeriod !== 'all') parts.push(fPeriod);
+    if (fBilled !== 'all') parts.push(fBilled);
     if (q) parts.push('search');
     return parts.join('-');
   };
+  const allInvoiced = filtered.length > 0 && filtered.every(e => e.invoiced);
 
   // Totals for the current filter (the amount to invoice).
   const sums = filtered.reduce((a, e) => {
@@ -1319,6 +1332,12 @@ function Log({ entries, clients, rates, clientRates, vat, clientVat, rounding, c
           <option value="year">This year</option>
           <option value="custom">Custom range…</option>
         </select>
+        <select value={fBilled} onChange={(e) => setFBilled(e.target.value)}
+          className="bg-slate-900 border border-slate-800 rounded-lg px-3 py-1.5 text-sm">
+          <option value="all">All</option>
+          <option value="unbilled">Unbilled</option>
+          <option value="invoiced">Invoiced</option>
+        </select>
         <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search notes, task, client…"
           className="flex-1 min-w-0 bg-slate-900 border border-slate-800 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:border-amber-600 placeholder:text-slate-600" />
         <button onClick={() => onExport(filtered, exportSuffix())}
@@ -1353,7 +1372,12 @@ function Log({ entries, clients, rates, clientRates, vat, clientVat, rounding, c
             <div><span className="text-slate-500">Net </span><span className="text-slate-200 font-medium">{formatEUR(netTotal)}</span></div>
             {sums.freeCount > 0 && <div className="text-emerald-400/80 text-xs">{sums.freeCount} free</div>}
           </div>
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-3 flex-wrap">
+            <button onClick={() => onBulkInvoiced(filtered, !allInvoiced)}
+              title={allInvoiced ? 'Mark all shown entries as unbilled' : 'Mark all shown entries as invoiced'}
+              className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm transition whitespace-nowrap border ${allInvoiced ? 'bg-emerald-600/15 border-emerald-700/50 text-emerald-300 hover:bg-emerald-600/25' : 'bg-slate-800 border-slate-700 text-slate-200 hover:bg-slate-700'}`}>
+              <Check className="w-4 h-4" /> {allInvoiced ? 'Mark unbilled' : 'Mark invoiced'}
+            </button>
             <button onClick={() => setShowLines(true)}
               className="flex items-center gap-1.5 bg-amber-600 hover:bg-amber-500 text-white px-3 py-2 rounded-lg text-sm transition whitespace-nowrap">
               <List className="w-4 h-4" /> Invoice lines
@@ -1413,6 +1437,9 @@ function Log({ entries, clients, rates, clientRates, vat, clientVat, rounding, c
                           {e.free && (
                             <span className="text-[10px] uppercase tracking-wider bg-emerald-600/20 text-emerald-400 px-1.5 py-0.5 rounded font-semibold">FREE</span>
                           )}
+                          {e.invoiced && (
+                            <span className="text-[10px] uppercase tracking-wider bg-sky-600/20 text-sky-300 px-1.5 py-0.5 rounded font-semibold">Invoiced</span>
+                          )}
                         </div>
                         {e.note && <div className="text-sm text-slate-500 mt-0.5 truncate">{e.note}</div>}
                         <div className="text-xs text-slate-600 mt-1">{formatTime(e.start)} – {formatTime(e.end)}</div>
@@ -1433,6 +1460,8 @@ function Log({ entries, clients, rates, clientRates, vat, clientVat, rounding, c
                         )}
                       </div>
                       <div className="flex gap-1">
+                        <button onClick={() => onToggleInvoiced(e)} aria-label="Toggle invoiced" title={e.invoiced ? 'Invoiced — click to mark unbilled' : 'Mark as invoiced'}
+                          className={`p-1.5 transition ${e.invoiced ? 'text-sky-400 hover:text-sky-300' : 'text-slate-500 hover:text-sky-400'}`}><Check className="w-4 h-4" /></button>
                         <button onClick={() => onResume(e)} aria-label="Continue this work" className="p-1.5 text-slate-500 hover:text-amber-400 transition" title="Continue this work (start a new session)"><Play className="w-4 h-4" /></button>
                         <button onClick={() => onEdit(e)} aria-label="Edit entry" className="p-1.5 text-slate-500 hover:text-slate-200 transition" title="Edit"><Edit2 className="w-4 h-4" /></button>
                         <button onClick={() => onDelete(e)} aria-label="Delete entry" className="p-1.5 text-slate-500 hover:text-red-400 transition" title="Delete"><Trash2 className="w-4 h-4" /></button>
