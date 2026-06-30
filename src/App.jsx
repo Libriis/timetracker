@@ -150,6 +150,7 @@ export default function TimeTracker() {
   const [customStart, setCustomStart] = useState('');
   const [customEnd, setCustomEnd] = useState('');
   const [filterClient, setFilterClient] = useState('all');
+  const [filterBilled, setFilterBilled] = useState('all'); // all | unbilled | invoiced
 
   const [showManualEntry, setShowManualEntry] = useState(false);
   const [editingEntry, setEditingEntry] = useState(null);
@@ -392,9 +393,12 @@ export default function TimeTracker() {
   const filteredEntries = useMemo(() => {
     const start = periodStart();
     const end = periodEnd();
-    return entries.filter(e => e.start >= start && e.start <= end && (filterClient === 'all' || e.client === filterClient));
+    return entries.filter(e =>
+      e.start >= start && e.start <= end
+      && (filterClient === 'all' || e.client === filterClient)
+      && (filterBilled === 'all' || (filterBilled === 'invoiced' ? e.invoiced : !e.invoiced)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [entries, period, customStart, customEnd, filterClient]);
+  }, [entries, period, customStart, customEnd, filterClient, filterBilled]);
 
   const projectSuggestions = useMemo(
     () => Array.from(new Set(entries.map(e => e.project).filter(Boolean))),
@@ -488,6 +492,7 @@ export default function TimeTracker() {
     const parts = [];
     if (filterClient !== 'all') parts.push(filterClient.replace(/[^a-z0-9]+/gi, '-').toLowerCase());
     if (period !== 'all') parts.push(period === 'custom' ? `${customStart || 'start'}_${customEnd || 'end'}` : period);
+    if (filterBilled !== 'all') parts.push(filterBilled);
     return parts.join('-');
   };
   const exportDashboardCSV = () => exportCSV(filteredEntries, csvFilterSuffix());
@@ -658,6 +663,7 @@ export default function TimeTracker() {
             customStart={customStart} setCustomStart={setCustomStart}
             customEnd={customEnd} setCustomEnd={setCustomEnd}
             filterClient={filterClient} setFilterClient={setFilterClient}
+            filterBilled={filterBilled} setFilterBilled={setFilterBilled}
             clients={clients}
             totalMs={totalMs} totalBillableMs={totalBillableMs}
             totalEarnings={totalEarnings} totalGross={totalGross}
@@ -785,7 +791,7 @@ function Select({ label, value, onChange, options }) {
   );
 }
 
-function Dashboard({ period, setPeriod, customStart, setCustomStart, customEnd, setCustomEnd, filterClient, setFilterClient, clients, totalMs, totalBillableMs, totalEarnings, totalGross, totalComplimentary, complimentaryCount, byClient, filteredCount, onExport, onExportPDF }) {
+function Dashboard({ period, setPeriod, customStart, setCustomStart, customEnd, setCustomEnd, filterClient, setFilterClient, filterBilled, setFilterBilled, clients, totalMs, totalBillableMs, totalEarnings, totalGross, totalComplimentary, complimentaryCount, byClient, filteredCount, onExport, onExportPDF }) {
   const sortedClients = Object.entries(byClient).sort((a, b) => b[1].total - a[1].total);
   const todayStr = new Date().toISOString().slice(0, 10);
   const handleSelectCustom = () => {
@@ -820,11 +826,18 @@ function Dashboard({ period, setPeriod, customStart, setCustomStart, customEnd, 
             Custom
           </button>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <select value={filterClient} onChange={(e) => setFilterClient(e.target.value)}
             className="bg-slate-900 border border-slate-800 rounded-lg px-3 py-1.5 text-sm">
             <option value="all">All clients</option>
             {clients.map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
+          <select value={filterBilled} onChange={(e) => setFilterBilled(e.target.value)}
+            title="Filter by billing status"
+            className="bg-slate-900 border border-slate-800 rounded-lg px-3 py-1.5 text-sm">
+            <option value="all">All</option>
+            <option value="unbilled">Unbilled</option>
+            <option value="invoiced">Invoiced</option>
           </select>
           <button onClick={onExport}
             className="flex items-center gap-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-200 px-3 py-1.5 rounded-lg text-sm transition">
