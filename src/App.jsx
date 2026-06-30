@@ -2570,7 +2570,16 @@ function printReportHTML(html, client, onMessage) {
   try {
     const iframe = document.createElement('iframe');
     iframe.setAttribute('aria-hidden', 'true');
-    iframe.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;opacity:0;';
+    // Off-screen but with a real A4-ish size so the webview actually lays the page out for printing.
+    iframe.style.cssText = 'position:fixed;left:-10000px;top:0;width:794px;height:1123px;border:0;';
+    document.body.appendChild(iframe);
+
+    // document.write into the same-origin blank frame — avoids srcdoc/CSP frame-src issues in the packaged app.
+    const doc = iframe.contentWindow ? iframe.contentWindow.document : iframe.contentDocument;
+    if (!doc) { try { document.body.removeChild(iframe); } catch (e) {} downloadReportHTML(html, client, onMessage); return; }
+    doc.open();
+    doc.write(html);
+    doc.close();
 
     let cleaned = false;
     const cleanup = () => {
@@ -2579,7 +2588,8 @@ function printReportHTML(html, client, onMessage) {
       try { document.body.removeChild(iframe); } catch (e) { /* already removed */ }
     };
 
-    iframe.onload = () => {
+    // Give the webview a moment to render the written document before invoking print.
+    setTimeout(() => {
       const frameWin = iframe.contentWindow;
       if (!frameWin) { cleanup(); downloadReportHTML(html, client, onMessage); return; }
       frameWin.onafterprint = cleanup;
@@ -2592,12 +2602,8 @@ function printReportHTML(html, client, onMessage) {
         downloadReportHTML(html, client, onMessage);
         return;
       }
-      // Safety net in case onafterprint never fires (some webviews).
-      setTimeout(cleanup, 120000);
-    };
-
-    document.body.appendChild(iframe);
-    iframe.srcdoc = html;
+      setTimeout(cleanup, 120000); // safety net if onafterprint never fires
+    }, 300);
   } catch (err) {
     console.error(err);
     downloadReportHTML(html, client, onMessage);
