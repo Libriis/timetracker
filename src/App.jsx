@@ -443,10 +443,13 @@ export default function TimeTracker() {
         byClient[e.client].complimentary += calcStandardValue(e, rates, clientRates, rounding, clientRounding);
         byClient[e.client].complimentaryCount += 1;
       }
-      if (!byClient[e.client].byTask[e.task]) byClient[e.client].byTask[e.task] = { ms: 0, billable: 0, earnings: 0 };
-      byClient[e.client].byTask[e.task].ms += e.duration;
-      byClient[e.client].byTask[e.task].billable += billableMs;
-      byClient[e.client].byTask[e.task].earnings += earned;
+      if (!byClient[e.client].byTask[e.task]) byClient[e.client].byTask[e.task] = { ms: 0, billable: 0, earnings: 0, notes: [] };
+      const bt = byClient[e.client].byTask[e.task];
+      bt.ms += e.duration;
+      bt.billable += billableMs;
+      bt.earnings += earned;
+      const noteLabel = [e.project, e.note].filter(Boolean).join(' — ');
+      if (noteLabel && !bt.notes.includes(noteLabel)) bt.notes.push(noteLabel);
     });
     const totalGross = round2(Object.values(byClient).reduce((s, c) => s + c.earnings + round2(c.earnings * c.vat / 100), 0));
     return { totalMs, totalBillableMs, totalEarnings, totalComplimentary, complimentaryCount, byClient, totalGross };
@@ -987,21 +990,30 @@ function ClientCard({ client, data, totalMs }) {
           const taskWithVat = t.earnings * (1 + data.vat / 100);
           const taskShowBillable = t.billable !== t.ms;
           return (
-            <div key={task} className="flex items-center justify-between text-sm gap-2">
-              <div className="flex items-center gap-2 flex-1 min-w-0">
-                <span className="text-slate-400 truncate">{task}</span>
-                <div className="flex-1 h-1 bg-slate-800 rounded-full overflow-hidden max-w-[80px]">
-                  <div className="h-full bg-slate-600" style={{ width: `${taskPct}%` }} />
+            <div key={task}>
+              <div className="flex items-center justify-between text-sm gap-2">
+                <div className="flex items-center gap-2 flex-1 min-w-0">
+                  <span className="text-slate-400 truncate">{task}</span>
+                  <div className="flex-1 h-1 bg-slate-800 rounded-full overflow-hidden max-w-[80px]">
+                    <div className="h-full bg-slate-600" style={{ width: `${taskPct}%` }} />
+                  </div>
+                </div>
+                <div className="text-right whitespace-nowrap">
+                  <div className="font-mono text-slate-300">{formatHours(taskShowBillable ? t.billable : t.ms)}</div>
+                  {taskShowBillable && <div className="font-mono text-slate-600 text-[10px]">{formatHours(t.ms)} tracked</div>}
+                </div>
+                <div className="text-right whitespace-nowrap w-24">
+                  <div className="font-mono text-amber-400/80 text-sm">{formatEUR(t.earnings)}</div>
+                  <div className="font-mono text-slate-600 text-xs">{formatEUR(taskWithVat)}</div>
                 </div>
               </div>
-              <div className="text-right whitespace-nowrap">
-                <div className="font-mono text-slate-300">{formatHours(taskShowBillable ? t.billable : t.ms)}</div>
-                {taskShowBillable && <div className="font-mono text-slate-600 text-[10px]">{formatHours(t.ms)} tracked</div>}
-              </div>
-              <div className="text-right whitespace-nowrap w-24">
-                <div className="font-mono text-amber-400/80 text-sm">{formatEUR(t.earnings)}</div>
-                <div className="font-mono text-slate-600 text-xs">{formatEUR(taskWithVat)}</div>
-              </div>
+              {t.notes && t.notes.length > 0 && (
+                <ul className="mt-0.5 mb-1 ml-1 space-y-0.5">
+                  {t.notes.map((n, i) => (
+                    <li key={i} className="text-xs text-slate-500 truncate before:content-['·'] before:text-slate-600 before:mr-1.5">{n}</li>
+                  ))}
+                </ul>
+              )}
             </div>
           );
         })}
