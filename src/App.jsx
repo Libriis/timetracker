@@ -443,13 +443,16 @@ export default function TimeTracker() {
         byClient[e.client].complimentary += calcStandardValue(e, rates, clientRates, rounding, clientRounding);
         byClient[e.client].complimentaryCount += 1;
       }
-      if (!byClient[e.client].byTask[e.task]) byClient[e.client].byTask[e.task] = { ms: 0, billable: 0, earnings: 0, notes: [] };
+      if (!byClient[e.client].byTask[e.task]) byClient[e.client].byTask[e.task] = { ms: 0, billable: 0, earnings: 0, byNote: {} };
       const bt = byClient[e.client].byTask[e.task];
       bt.ms += e.duration;
       bt.billable += billableMs;
       bt.earnings += earned;
-      const noteLabel = [e.project, e.note].filter(Boolean).join(' — ');
-      if (noteLabel && !bt.notes.includes(noteLabel)) bt.notes.push(noteLabel);
+      const noteLabel = [e.project, e.note].filter(Boolean).join(' — ') || '(no note)';
+      if (!bt.byNote[noteLabel]) bt.byNote[noteLabel] = { ms: 0, billable: 0, earnings: 0 };
+      bt.byNote[noteLabel].ms += e.duration;
+      bt.byNote[noteLabel].billable += billableMs;
+      bt.byNote[noteLabel].earnings += earned;
     });
     const totalGross = round2(Object.values(byClient).reduce((s, c) => s + c.earnings + round2(c.earnings * c.vat / 100), 0));
     return { totalMs, totalBillableMs, totalEarnings, totalComplimentary, complimentaryCount, byClient, totalGross };
@@ -1007,10 +1010,16 @@ function ClientCard({ client, data, totalMs }) {
                   <div className="font-mono text-slate-600 text-xs">{formatEUR(taskWithVat)}</div>
                 </div>
               </div>
-              {t.notes && t.notes.length > 0 && (
-                <ul className="mt-0.5 mb-1 ml-1 space-y-0.5">
-                  {t.notes.map((n, i) => (
-                    <li key={i} className="text-xs text-slate-500 truncate before:content-['·'] before:text-slate-600 before:mr-1.5">{n}</li>
+              {t.byNote && Object.keys(t.byNote).length > 0 && (
+                <ul className="mt-1 mb-1 ml-1 space-y-0.5">
+                  {Object.entries(t.byNote).sort((a, b) => b[1].ms - a[1].ms).map(([label, n]) => (
+                    <li key={label} className="flex items-center justify-between gap-3 text-xs">
+                      <span className="text-slate-500 truncate before:content-['·'] before:text-slate-600 before:mr-1.5">{label}</span>
+                      <span className="flex items-center gap-2 font-mono whitespace-nowrap flex-shrink-0">
+                        <span className="text-slate-400">{formatHours(n.ms)}</span>
+                        <span className="text-amber-400/60 w-14 text-right">{formatEUR(n.earnings)}</span>
+                      </span>
+                    </li>
                   ))}
                 </ul>
               )}
