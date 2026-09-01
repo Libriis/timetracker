@@ -2125,13 +2125,54 @@ function FreeToggle({ free, setFree }) {
   );
 }
 
-function DurationPicker({ date, setDate, durationMinutes, setDurationMinutes }) {
+function DurationSlider({ durationMinutes, setDurationMinutes }) {
   const presets = [15, 30, 45, 60, 90, 120, 180, 240];
-  const hours = Math.floor(durationMinutes / 60);
-  const minutes = durationMinutes % 60;
+  const step = 5;
+  const sliderMax = Math.max(480, Math.ceil(durationMinutes / 60) * 60);
+  const safeMinutes = Math.max(0, Math.round(durationMinutes));
+  const hours = Math.floor(safeMinutes / 60);
+  const minutes = safeMinutes % 60;
   const durationLabel = hours > 0
     ? (minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`)
     : `${minutes}m`;
+  const ticks = [0, 0.25, 0.5, 0.75, 1].map(f => {
+    const m = f === 0 ? step : Math.round(sliderMax * f);
+    return m < 60 ? `${m}m` : `${Math.round(m / 60 * 10) / 10}h`;
+  });
+  return (
+    <div className="space-y-3">
+      <div>
+        <div className="flex items-center justify-between mb-2">
+          <label className="text-xs text-slate-500">Duration</label>
+          <span className="font-mono text-amber-400 text-lg tabular-nums">{durationLabel}</span>
+        </div>
+        <input type="range" min={step} max={sliderMax} step={step} value={Math.min(sliderMax, Math.max(step, safeMinutes))}
+          onChange={(e) => setDurationMinutes(parseInt(e.target.value, 10))}
+          aria-label="Duration in minutes"
+          className="w-full cursor-pointer" style={{ accentColor: '#d97706' }} />
+        <div className="flex justify-between text-[10px] text-slate-600 mt-1 px-0.5">
+          {ticks.map((t, i) => <span key={i}>{t}</span>)}
+        </div>
+      </div>
+      <div>
+        <div className="text-xs text-slate-500 mb-2">Quick presets</div>
+        <div className="flex flex-wrap gap-1.5">
+          {presets.map(m => {
+            const label = m >= 60 ? `${m / 60}h${m % 60 > 0 ? ` ${m % 60}m` : ''}` : `${m}m`;
+            return (
+              <button key={m} type="button" onClick={() => setDurationMinutes(m)}
+                className={`px-2.5 py-1 rounded-md text-xs transition ${safeMinutes === m ? 'bg-amber-600 text-white' : 'bg-slate-800 hover:bg-slate-700 text-slate-300'}`}>
+                {label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DurationPicker({ date, setDate, durationMinutes, setDurationMinutes }) {
   const previewRange = () => {
     const dateObj = new Date(date + 'T00:00:00');
     if (isNaN(dateObj.getTime())) return '—';
@@ -2149,32 +2190,7 @@ function DurationPicker({ date, setDate, durationMinutes, setDurationMinutes }) 
         <input type="date" value={date} onChange={(e) => setDate(e.target.value)}
           className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-amber-600" />
       </div>
-      <div>
-        <div className="flex items-center justify-between mb-2">
-          <label className="text-xs text-slate-500">Duration</label>
-          <span className="font-mono text-amber-400 text-lg tabular-nums">{durationLabel}</span>
-        </div>
-        <input type="range" min="5" max="480" step="5" value={durationMinutes}
-          onChange={(e) => setDurationMinutes(parseInt(e.target.value, 10))}
-          className="w-full cursor-pointer" style={{ accentColor: '#d97706' }} />
-        <div className="flex justify-between text-[10px] text-slate-600 mt-1 px-0.5">
-          <span>5m</span><span>1h</span><span>2h</span><span>4h</span><span>8h</span>
-        </div>
-      </div>
-      <div>
-        <div className="text-xs text-slate-500 mb-2">Quick presets</div>
-        <div className="flex flex-wrap gap-1.5">
-          {presets.map(m => {
-            const label = m >= 60 ? `${m / 60}h${m % 60 > 0 ? ` ${m % 60}m` : ''}` : `${m}m`;
-            return (
-              <button key={m} type="button" onClick={() => setDurationMinutes(m)}
-                className={`px-2.5 py-1 rounded-md text-xs transition ${durationMinutes === m ? 'bg-amber-600 text-white' : 'bg-slate-800 hover:bg-slate-700 text-slate-300'}`}>
-                {label}
-              </button>
-            );
-          })}
-        </div>
-      </div>
+      <DurationSlider durationMinutes={durationMinutes} setDurationMinutes={setDurationMinutes} />
       <div className="flex items-center gap-2 text-xs text-slate-500 bg-slate-950 border border-slate-800 rounded-lg px-3 py-2">
         <span className="text-slate-600">Will be saved as:</span>
         <span className="text-slate-300">{previewRange()}</span>
@@ -2197,6 +2213,15 @@ function EditEntryModal({ entry, clients, tasks, onClose, onSave }) {
   const [start, setStart] = useState(toInput(entry.start));
   const [end, setEnd] = useState(toInput(entry.end));
   const [error, setError] = useState('');
+  const startMs = new Date(start).getTime();
+  const endMs = new Date(end).getTime();
+  const durationMinutes = (!isNaN(startMs) && !isNaN(endMs) && endMs > startMs) ? Math.round((endMs - startMs) / 60000) : 0;
+  // Slider keeps Start fixed and moves End.
+  const setDurationMinutes = (m) => {
+    if (isNaN(startMs)) { setError('Set a valid start time first.'); return; }
+    setError('');
+    setEnd(toInput(startMs + m * 60000));
+  };
   const save = () => {
     const s = new Date(start).getTime();
     const e = new Date(end).getTime();
@@ -2230,6 +2255,10 @@ function EditEntryModal({ entry, clients, tasks, onClose, onSave }) {
             <input type="datetime-local" value={end} onChange={(e) => setEnd(e.target.value)}
               className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-amber-600" />
           </div>
+        </div>
+        <div className="bg-slate-950/60 border border-slate-800 rounded-lg p-3">
+          <DurationSlider durationMinutes={durationMinutes} setDurationMinutes={setDurationMinutes} />
+          <div className="text-[11px] text-slate-600 mt-2">Slider keeps Start fixed and moves End.</div>
         </div>
       </div>
       {error && <div className="mt-3 text-xs rounded-lg px-3 py-2 border bg-red-600/10 border-red-700/40 text-red-300">{error}</div>}
