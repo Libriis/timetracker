@@ -9,6 +9,7 @@
  * @property {string} [note]
  * @property {boolean} [free]      - complimentary work, billed at €0
  * @property {boolean} [invoiced]  - already put on an invoice
+ * @property {boolean} [ai]        - AI-assisted, so the tracked time undersells the work (see AI_FACTOR)
  * @property {number} start        - epoch ms
  * @property {number} end          - epoch ms
  * @property {number} duration     - worked ms (may be < end-start when paused)
@@ -24,7 +25,29 @@
  * @property {number} startedAt        - epoch ms when the session began
  * @property {number|null} runningSince - epoch ms of the current running segment, or null when paused
  * @property {number} accumulatedMs    - worked ms from completed (un-paused) segments
+ * @property {boolean} [ai]            - AI-assisted session; carried onto the entry when stopped
  */
+
+/**
+ * AI-assisted work lands faster than doing it by hand, so the stopwatch undersells it.
+ * Billable time is the tracked time scaled by this factor — the client buys the result,
+ * not the stopwatch. Tracked time is never overwritten, so the flag stays reversible.
+ */
+export const AI_FACTOR = 1.5;
+
+/** Tracked ms scaled for AI assistance. Plain ms when the flag is off. */
+export function aiAdjusted(durationMs, ai) {
+  return ai ? Math.round(durationMs * AI_FACTOR) : durationMs;
+}
+
+/**
+ * The ms a client is charged for: AI factor first, then the rounding block.
+ * Scaling before rounding keeps the block boundary meaningful (a 50 min AI session
+ * becomes 75 min, which bills as 1h15 at 15-minute rounding, not 1h30).
+ */
+export function billableDuration(entry, roundingMinutes) {
+  return roundedDuration(aiAdjusted(entry.duration, entry.ai), roundingMinutes);
+}
 
 /** Effective hourly rate for a client+task, honouring per-client overrides. */
 export function getRate(client, task, rates, clientRates) {
@@ -64,7 +87,7 @@ export function calcEarnings(entry, rates, clientRates, defaultRounding, clientR
   if (entry.free) return 0;
   const rate = getRate(entry.client, entry.task, rates, clientRates);
   const r = defaultRounding != null ? getRounding(entry.client, defaultRounding, clientRounding || {}) : 0;
-  const billableMs = roundedDuration(entry.duration, r);
+  const billableMs = billableDuration(entry, r);
   return round2((billableMs / 3600000) * rate);
 }
 
@@ -72,7 +95,7 @@ export function calcEarnings(entry, rates, clientRates, defaultRounding, clientR
 export function calcStandardValue(entry, rates, clientRates, defaultRounding, clientRounding) {
   const rate = getRate(entry.client, entry.task, rates, clientRates);
   const r = defaultRounding != null ? getRounding(entry.client, defaultRounding, clientRounding || {}) : 0;
-  const billableMs = roundedDuration(entry.duration, r);
+  const billableMs = billableDuration(entry, r);
   return round2((billableMs / 3600000) * rate);
 }
 
@@ -90,6 +113,7 @@ export function normalizeTimer(tt) {
     task: tt.task,
     project: tt.project || '',
     note: tt.note || '',
+    ai: !!tt.ai,
     startedAt: tt.startedAt,
     runningSince: legacy ? tt.startedAt : (tt.runningSince ?? null),
     accumulatedMs: tt.accumulatedMs || 0,
@@ -113,7 +137,7 @@ export function buildInvoiceLines(entries, cfg) {
         rate: getRate(e.client, e.task, rates, clientRates), vatPct: getVat(e.client, vat, clientVat) };
       map.set(key, g);
     }
-    g.billableMs += roundedDuration(e.duration, getRounding(e.client, rounding, clientRounding));
+    g.billableMs += billableDuration(e, getRounding(e.client, rounding, clientRounding));
   }
   const lines = [...map.values()].map(g => {
     const hours = g.billableMs / 3600000;

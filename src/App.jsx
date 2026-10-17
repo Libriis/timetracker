@@ -8,7 +8,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { getVersion } from '@tauri-apps/api/app';
 import { check } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
-import { round2, getRate, getVat, getRounding, roundedDuration, calcEarnings, calcStandardValue, timerElapsed, normalizeTimer, buildInvoiceLines } from './lib/billing.js';
+import { round2, getRate, getVat, getRounding, billableDuration, aiAdjusted, AI_FACTOR, calcEarnings, calcStandardValue, timerElapsed, normalizeTimer, buildInvoiceLines } from './lib/billing.js';
 
 const IS_TAURI = typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window);
 
@@ -144,6 +144,7 @@ export default function TimeTracker() {
   const [selectedTask, setSelectedTask] = useState(DEFAULT_TASKS[0]);
   const [project, setProject] = useState('');
   const [note, setNote] = useState('');
+  const [aiAssisted, setAiAssisted] = useState(false);
 
   const [view, setView] = useState('dashboard');
   const [period, setPeriod] = useState('week');
@@ -315,16 +316,19 @@ export default function TimeTracker() {
 
   const startTimer = () => {
     const ts = Date.now();
-    saveActiveTimers([...activeTimers, { id: newTimerId(), client: selectedClient, task: selectedTask, project, note, startedAt: ts, runningSince: ts, accumulatedMs: 0 }]);
+    saveActiveTimers([...activeTimers, { id: newTimerId(), client: selectedClient, task: selectedTask, project, note, ai: aiAssisted, startedAt: ts, runningSince: ts, accumulatedMs: 0 }]);
     setNote('');
     setProject('');
+    setAiAssisted(false);
   };
   // Continue an earlier piece of work: start an additional session pre-filled from an entry.
   const resumeWork = (work) => {
     const ts = Date.now();
-    saveActiveTimers([...activeTimers, { id: newTimerId(), client: work.client, task: work.task, project: work.project || '', note: work.note || '', startedAt: ts, runningSince: ts, accumulatedMs: 0 }]);
+    saveActiveTimers([...activeTimers, { id: newTimerId(), client: work.client, task: work.task, project: work.project || '', note: work.note || '', ai: !!work.ai, startedAt: ts, runningSince: ts, accumulatedMs: 0 }]);
     pushToast(`Started: ${work.client} · ${work.task}${work.project ? ' · ' + work.project : ''}`, 'ok');
   };
+  // AI can turn out to be the bigger half mid-session, so the flag stays flippable while running.
+  const toggleTimerAi = (id) => saveActiveTimers(activeTimers.map(t => t.id === id ? { ...t, ai: !t.ai } : t));
   const pauseTimer = (id) => saveActiveTimers(activeTimers.map(t => (t.id === id && t.runningSince) ? { ...t, accumulatedMs: timerElapsed(t), runningSince: null } : t));
   const resumeTimer = (id) => saveActiveTimers(activeTimers.map(t => (t.id === id && !t.runningSince) ? { ...t, runningSince: Date.now() } : t));
   const stopTimer = (id) => {
@@ -335,7 +339,7 @@ export default function TimeTracker() {
     if (duration < 1000) { saveActiveTimers(rest); return; }
     const entry = {
       id: 'e_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
-      client: t.client, task: t.task, project: t.project || '', note: t.note || '',
+      client: t.client, task: t.task, project: t.project || '', note: t.note || '', ai: !!t.ai,
       start: t.startedAt, end: Date.now(), duration,
     };
     saveEntries([entry, ...entries]);
@@ -419,7 +423,7 @@ export default function TimeTracker() {
   const { totalMs, totalBillableMs, totalEarnings, totalComplimentary, complimentaryCount, byClient, totalGross } = useMemo(() => {
     const totalMs = filteredEntries.reduce((s, e) => s + e.duration, 0);
     // Billable time excludes complimentary (free) work, so it matches the billed earnings and the PDF report.
-    const totalBillableMs = filteredEntries.reduce((s, e) => e.free ? s : s + roundedDuration(e.duration, getRounding(e.client, rounding, clientRounding)), 0);
+    const totalBillableMs = filteredEntries.reduce((s, e) => e.free ? s : s + billableDuration(e, getRounding(e.client, rounding, clientRounding)), 0);
     const totalEarnings = filteredEntries.reduce((s, e) => s + calcEarnings(e, rates, clientRates, rounding, clientRounding), 0);
     const totalComplimentary = filteredEntries.reduce((s, e) => e.free ? s + calcStandardValue(e, rates, clientRates, rounding, clientRounding) : s, 0);
     const complimentaryCount = filteredEntries.filter(e => e.free).length;
@@ -435,7 +439,7 @@ export default function TimeTracker() {
         };
       }
       const earned = calcEarnings(e, rates, clientRates, rounding, clientRounding);
-      const billableMs = e.free ? 0 : roundedDuration(e.duration, byClient[e.client].rounding);
+      const billableMs = e.free ? 0 : billableDuration(e, byClient[e.client].rounding);
       byClient[e.client].total += e.duration;
       byClient[e.client].billable += billableMs;
       byClient[e.client].earnings += earned;
@@ -464,18 +468,18 @@ export default function TimeTracker() {
     const excel = csvFormat === 'excel-sk';
     const sep = excel ? ';' : ',';
     const num = (n, dp = 2) => { const s = Number(n).toFixed(dp); return excel ? s.replace('.', ',') : s; };
-    const rows = [['Date', 'Client', 'Project', 'Task', 'Note', 'Free', 'Invoiced', 'Start', 'End', 'Duration (h)', 'Duration (hh:mm:ss)', 'Rounding (min)', 'Billable (h)', 'Rate (€/h)', 'Standard value (€)', 'Earnings net (€)', 'VAT %', 'Earnings with VAT (€)']];
+    const rows = [['Date', 'Client', 'Project', 'Task', 'Note', 'Free', 'AI', 'Invoiced', 'Start', 'End', 'Duration (h)', 'Duration (hh:mm:ss)', 'Rounding (min)', 'Billable (h)', 'Rate (€/h)', 'Standard value (€)', 'Earnings net (€)', 'VAT %', 'Earnings with VAT (€)']];
     [...data].sort((a, b) => b.start - a.start).forEach(e => {
       const rate = getRate(e.client, e.task, rates, clientRates);
       const r = getRounding(e.client, rounding, clientRounding);
-      const billableMs = roundedDuration(e.duration, r);
+      const billableMs = billableDuration(e, r);
       const standardValue = calcStandardValue(e, rates, clientRates, rounding, clientRounding);
       const earnings = calcEarnings(e, rates, clientRates, rounding, clientRounding);
       const entryVat = getVat(e.client, vat, clientVat);
       const withVat = earnings * (1 + entryVat / 100);
       rows.push([
         new Date(e.start).toISOString().slice(0, 10), e.client, e.project || '', e.task, e.note || '',
-        e.free ? 'YES' : '', e.invoiced ? 'YES' : '',
+        e.free ? 'YES' : '', e.ai ? 'YES' : '', e.invoiced ? 'YES' : '',
         new Date(e.start).toLocaleString(), new Date(e.end).toLocaleString(),
         num(e.duration / 3600000), formatDuration(e.duration),
         String(r), num(billableMs / 3600000),
@@ -572,6 +576,7 @@ export default function TimeTracker() {
         project: typeof e.project === 'string' ? e.project : '',
         note: typeof e.note === 'string' ? e.note : '',
         free: !!e.free,
+        ai: !!e.ai,
         invoiced: !!e.invoiced,
         start: e.start, end: e.end, duration: e.duration,
       }));
@@ -620,7 +625,7 @@ export default function TimeTracker() {
 
         <section className="bg-slate-900 border border-slate-800 rounded-2xl p-5 mb-6">
           {activeTimers.length > 0 && (
-            <ActiveTimersPanel timers={activeTimers} onPause={pauseTimer} onResume={resumeTimer} onStop={stopTimer} />
+            <ActiveTimersPanel timers={activeTimers} onPause={pauseTimer} onResume={resumeTimer} onStop={stopTimer} onToggleAi={toggleTimerAi} />
           )}
           <div>
               <div className="text-xs uppercase tracking-wider text-slate-500 mb-3">{activeTimers.length > 0 ? 'Start another session' : 'Start a new session'}</div>
@@ -637,6 +642,9 @@ export default function TimeTracker() {
                   <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. match preview post"
                     className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-amber-600" />
                 </div>
+              </div>
+              <div className="mb-3">
+                <AiToggle ai={aiAssisted} setAi={setAiAssisted} />
               </div>
               <div className="flex flex-wrap gap-2">
                 <button onClick={startTimer} className="flex items-center gap-2 bg-amber-600 hover:bg-amber-500 text-white font-medium px-5 py-2.5 rounded-xl transition">
@@ -717,7 +725,7 @@ export default function TimeTracker() {
           onSave={(u) => { updateEntry(u); setEditingEntry(null); }} />
       )}
       {pdfOptionsFor && (
-        <PDFOptionsModal client={filterClient} entryCount={pdfOptionsFor.entries.length} issuer={issuer}
+        <PDFOptionsModal client={filterClient} entryCount={pdfOptionsFor.entries.length} hasAi={pdfOptionsFor.entries.some(e => e.ai)} issuer={issuer}
           onClose={() => setPdfOptionsFor(null)}
           onGenerate={generatePDF} />
       )}
@@ -730,7 +738,7 @@ export default function TimeTracker() {
 }
 
 // Owns the 1-second clock so only the timer rows re-render each second, not the whole app.
-function ActiveTimersPanel({ timers, onPause, onResume, onStop }) {
+function ActiveTimersPanel({ timers, onPause, onResume, onStop, onToggleAi }) {
   const [now, setNow] = useState(Date.now());
   const anyRunning = timers.some(t => t.runningSince);
   useEffect(() => {
@@ -742,16 +750,17 @@ function ActiveTimersPanel({ timers, onPause, onResume, onStop }) {
   return (
     <div className="space-y-2 mb-5">
       {timers.map(t => (
-        <ActiveTimerRow key={t.id} timer={t} now={now} onPause={onPause} onResume={onResume} onStop={onStop} />
+        <ActiveTimerRow key={t.id} timer={t} now={now} onPause={onPause} onResume={onResume} onStop={onStop} onToggleAi={onToggleAi} />
       ))}
     </div>
   );
 }
 
-function ActiveTimerRow({ timer, now, onPause, onResume, onStop }) {
+function ActiveTimerRow({ timer, now, onPause, onResume, onStop, onToggleAi }) {
   const running = !!timer.runningSince;
   const elapsed = (timer.accumulatedMs || 0) + (running ? now - timer.runningSince : 0);
   const longWarn = running && elapsed >= LONG_TIMER_WARN_MS;
+  const billable = aiAdjusted(elapsed, timer.ai);
   return (
     <div className="bg-slate-950 border border-slate-800 rounded-xl p-3 flex flex-col sm:flex-row sm:items-center gap-3">
       <div className="flex-1 min-w-0">
@@ -759,12 +768,19 @@ function ActiveTimerRow({ timer, now, onPause, onResume, onStop }) {
           <span className="font-medium text-white truncate">{timer.client}</span>
           {timer.project && <span className="text-[10px] tracking-wide bg-slate-800 text-slate-300 px-1.5 py-0.5 rounded">{timer.project}</span>}
           {!running && <span className="text-[10px] uppercase tracking-wider bg-slate-700 text-slate-300 px-1.5 py-0.5 rounded">paused</span>}
+          {timer.ai && <span className="text-[10px] uppercase tracking-wider bg-violet-600/20 text-violet-300 px-1.5 py-0.5 rounded font-semibold">AI ×{AI_FACTOR}</span>}
         </div>
         <div className="text-xs text-slate-400 truncate">{timer.task}{timer.note && ` — ${timer.note}`}</div>
         {longWarn && <div className="text-[10px] text-amber-400 mt-0.5">Running {formatHours(elapsed)} — forgot to stop?</div>}
       </div>
       <div className="flex items-center gap-2 self-end sm:self-auto">
-        <div className={`font-mono text-2xl tabular-nums ${!running ? 'text-slate-500' : longWarn ? 'text-red-400' : 'text-amber-400'}`}>{formatDuration(elapsed)}</div>
+        <div className="text-right">
+          <div className={`font-mono text-2xl tabular-nums ${!running ? 'text-slate-500' : longWarn ? 'text-red-400' : 'text-amber-400'}`}>{formatDuration(elapsed)}</div>
+          {timer.ai && <div className="font-mono text-[10px] text-violet-300/80">→ {formatDuration(billable)} billable</div>}
+        </div>
+        <button onClick={() => onToggleAi(timer.id)} aria-label="Toggle AI-assisted"
+          title={timer.ai ? `AI-assisted — billed at ×${AI_FACTOR}. Click to turn off.` : `Mark as AI-assisted (bills at ×${AI_FACTOR})`}
+          className={`p-2 rounded-lg text-xs font-semibold transition ${timer.ai ? 'bg-violet-600 text-white hover:bg-violet-500' : 'bg-slate-800 text-slate-400 hover:text-violet-300'}`}>AI</button>
         {running ? (
           <button onClick={() => onPause(timer.id)} aria-label="Pause" title="Pause (breaks aren't counted)" className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 transition"><Pause className="w-4 h-4" /></button>
         ) : (
@@ -1267,7 +1283,7 @@ function Log({ entries, clients, rates, clientRates, vat, clientVat, rounding, c
     const net = calcEarnings(e, rates, clientRates, rounding, clientRounding);
     const v = getVat(e.client, vat, clientVat);
     a.ms += e.duration;
-    a.billableMs += e.free ? 0 : roundedDuration(e.duration, getRounding(e.client, rounding, clientRounding));
+    a.billableMs += e.free ? 0 : billableDuration(e, getRounding(e.client, rounding, clientRounding));
     a.net += net;
     a.vat += net * v / 100;
     if (e.free) a.freeCount += 1;
@@ -1395,7 +1411,7 @@ function Log({ entries, clients, rates, clientRates, vat, clientVat, rounding, c
                   const entryVat = getVat(e.client, vat, clientVat);
                   const earnedVat = earned * (1 + entryVat / 100);
                   const r = getRounding(e.client, rounding, clientRounding);
-                  const billableMs = roundedDuration(e.duration, r);
+                  const billableMs = billableDuration(e, r);
                   const showBillable = billableMs !== e.duration;
                   return (
                     <div key={e.id} className={`p-4 flex items-center gap-3 ${i < dayEntries.length - 1 ? 'border-b border-slate-800' : ''}`}>
@@ -1409,6 +1425,9 @@ function Log({ entries, clients, rates, clientRates, vat, clientVat, rounding, c
                           )}
                           {e.free && (
                             <span className="text-[10px] uppercase tracking-wider bg-emerald-600/20 text-emerald-400 px-1.5 py-0.5 rounded font-semibold">FREE</span>
+                          )}
+                          {e.ai && (
+                            <span className="text-[10px] uppercase tracking-wider bg-violet-600/20 text-violet-300 px-1.5 py-0.5 rounded font-semibold" title={`AI-assisted — billed at ×${AI_FACTOR}`}>AI ×{AI_FACTOR}</span>
                           )}
                           {e.invoiced && (
                             <span className="text-[10px] uppercase tracking-wider bg-sky-600/20 text-sky-300 px-1.5 py-0.5 rounded font-semibold">Invoiced</span>
@@ -2022,6 +2041,7 @@ function ManualEntryModal({ clients, tasks, onClose, onSave }) {
   const [project, setProject] = useState('');
   const [note, setNote] = useState('');
   const [free, setFree] = useState(false);
+  const [ai, setAi] = useState(false);
   const [mode, setMode] = useState('duration');
   const [start, setStart] = useState(toInput(new Date(now.getTime() - 3600000)));
   const [end, setEnd] = useState(toInput(now));
@@ -2034,7 +2054,7 @@ function ManualEntryModal({ clients, tasks, onClose, onSave }) {
       const s = new Date(start).getTime();
       const e = new Date(end).getTime();
       if (isNaN(s) || isNaN(e) || e <= s) { setError('End time must be after start time.'); return; }
-      onSave({ id: 'e_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8), client, task, project, note, free, start: s, end: e, duration: e - s });
+      onSave({ id: 'e_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8), client, task, project, note, free, ai, start: s, end: e, duration: e - s });
     } else {
       const dateObj = new Date(date + 'T00:00:00');
       if (isNaN(dateObj.getTime())) { setError('Invalid date.'); return; }
@@ -2043,7 +2063,7 @@ function ManualEntryModal({ clients, tasks, onClose, onSave }) {
       const endDate = isToday ? new Date() : (() => { const d = new Date(dateObj); d.setHours(18, 0, 0, 0); return d; })();
       const durationMs = durationMinutes * 60 * 1000;
       const startDate = new Date(endDate.getTime() - durationMs);
-      onSave({ id: 'e_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8), client, task, project, note, free, start: startDate.getTime(), end: endDate.getTime(), duration: durationMs });
+      onSave({ id: 'e_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8), client, task, project, note, free, ai, start: startDate.getTime(), end: endDate.getTime(), duration: durationMs });
     }
   };
 
@@ -2063,6 +2083,7 @@ function ManualEntryModal({ clients, tasks, onClose, onSave }) {
             className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-amber-600" />
         </div>
         <FreeToggle free={free} setFree={setFree} />
+        <AiToggle ai={ai} setAi={setAi} />
         <div>
           <label className="block text-xs text-slate-500 mb-1">Time entry method</label>
           <div className="flex gap-1 bg-slate-950 rounded-lg p-1">
@@ -2097,6 +2118,31 @@ function ManualEntryModal({ clients, tasks, onClose, onSave }) {
         </button>
       </div>
     </Modal>
+  );
+}
+
+function AiToggle({ ai, setAi }) {
+  return (
+    <button
+      type="button"
+      onClick={() => setAi(!ai)}
+      className={`w-full flex items-start gap-3 border rounded-lg p-3 text-left transition ${ai
+          ? 'bg-violet-600/10 border-violet-700/50 hover:bg-violet-600/15'
+          : 'bg-slate-950 border-slate-800 hover:bg-slate-900'
+        }`}
+    >
+      <div className={`mt-0.5 w-9 h-5 rounded-full transition flex-shrink-0 relative ${ai ? 'bg-violet-600' : 'bg-slate-700'}`}>
+        <div className={`absolute top-0.5 w-4 h-4 bg-white rounded-full transition-all ${ai ? 'left-[18px]' : 'left-0.5'}`} />
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="text-sm text-slate-200">AI-assisted</div>
+        <div className="text-xs text-slate-500 mt-0.5">
+          {ai
+            ? `Billed at ×${AI_FACTOR} of the tracked time. The client sees only the billable time.`
+            : `Toggle on when AI did part of the work, so the stopwatch undersells it. Bills at ×${AI_FACTOR}.`}
+        </div>
+      </div>
+    </button>
   );
 }
 
@@ -2210,6 +2256,7 @@ function EditEntryModal({ entry, clients, tasks, onClose, onSave }) {
   const [project, setProject] = useState(entry.project || '');
   const [note, setNote] = useState(entry.note || '');
   const [free, setFree] = useState(!!entry.free);
+  const [ai, setAi] = useState(!!entry.ai);
   const [start, setStart] = useState(toInput(entry.start));
   const [end, setEnd] = useState(toInput(entry.end));
   const [error, setError] = useState('');
@@ -2226,7 +2273,7 @@ function EditEntryModal({ entry, clients, tasks, onClose, onSave }) {
     const s = new Date(start).getTime();
     const e = new Date(end).getTime();
     if (isNaN(s) || isNaN(e) || e <= s) { setError('End time must be after start time.'); return; }
-    onSave({ ...entry, client, task, project, note, free, start: s, end: e, duration: e - s });
+    onSave({ ...entry, client, task, project, note, free, ai, start: s, end: e, duration: e - s });
   };
   return (
     <Modal onClose={onClose} title="Edit entry">
@@ -2244,6 +2291,7 @@ function EditEntryModal({ entry, clients, tasks, onClose, onSave }) {
             className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-amber-600" />
         </div>
         <FreeToggle free={free} setFree={setFree} />
+        <AiToggle ai={ai} setAi={setAi} />
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="block text-xs text-slate-500 mb-1">Start</label>
@@ -2272,7 +2320,7 @@ function EditEntryModal({ entry, clients, tasks, onClose, onSave }) {
   );
 }
 
-function PDFOptionsModal({ client, entryCount, issuer, onClose, onGenerate }) {
+function PDFOptionsModal({ client, entryCount, hasAi, issuer, onClose, onGenerate }) {
   const todayISO = new Date().toISOString().slice(0, 10);
   const dueISO = new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10);
   const [language, setLanguage] = useState('en');
@@ -2361,6 +2409,13 @@ function PDFOptionsModal({ client, entryCount, issuer, onClose, onGenerate }) {
         {!showDates && (
           <div className="text-xs text-slate-500 bg-slate-950 border border-slate-800 rounded-lg p-3">
             <span className="text-amber-400/80">Note:</span> Date range will be hidden from the header. The report will show only summary, breakdown by task, and time-only details.
+          </div>
+        )}
+
+        {hasAi && (
+          <div className="text-xs text-slate-400 bg-violet-600/10 border border-violet-700/40 rounded-lg p-3">
+            <span className="text-violet-300 font-semibold">AI-assisted entries in this report.</span> They are billed at ×{AI_FACTOR}.
+            The report will show the billable time only — the tracked time column and the per-entry time ranges stay out, so the two can never contradict each other.
           </div>
         )}
       </div>
@@ -2671,7 +2726,7 @@ function buildPDFHTML({ client, entries, rates, clientRates, vat, rounding, peri
     if (e.free) return;
     if (!byTask[e.task]) byTask[e.task] = { ms: 0, billableMs: 0, earnings: 0, count: 0, rate: getRate(e.client, e.task, rates, clientRates) };
     byTask[e.task].ms += e.duration;
-    byTask[e.task].billableMs += roundedDuration(e.duration, rounding);
+    byTask[e.task].billableMs += billableDuration(e, rounding);
     byTask[e.task].earnings += calcEarnings(e, rates, clientRates, rounding, tempClientRounding);
     byTask[e.task].count += 1;
   });
@@ -2679,7 +2734,7 @@ function buildPDFHTML({ client, entries, rates, clientRates, vat, rounding, peri
 
   const billableEntriesCount = entries.filter(e => !e.free).length;
   const billableTotalMs = entries.reduce((s, e) => e.free ? s : s + e.duration, 0);
-  const billableTotalHours = entries.reduce((s, e) => e.free ? s : s + roundedDuration(e.duration, rounding), 0) / 3600000;
+  const billableTotalHours = entries.reduce((s, e) => e.free ? s : s + billableDuration(e, rounding), 0) / 3600000;
 
   const periodLabel = (() => {
     if (period === 'today') return t.today;
@@ -2696,6 +2751,11 @@ function buildPDFHTML({ client, entries, rates, clientRates, vat, rounding, peri
   const generatedAt = new Date().toLocaleString(t.locale);
   const escape = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const showRoundingNote = rounding > 0 && billableTotalMs !== Math.round(billableTotalHours * 3600000);
+  // AI-assisted work is billed above the stopwatch, so the raw tracked time must never reach the
+  // client: no "tracked" column and no per-entry clock times that would contradict the billed hours.
+  const hasAi = entries.some(e => e.ai);
+  const showTracked = showRoundingNote && !hasAi;
+  const showEntryTimes = showTimes && !hasAi;
 
   const docTitle = invoiceMode ? t.invoiceTitle : t.title;
   const footerLabel = invoiceMode ? t.invoiceFooter : t.footer;
@@ -2864,8 +2924,8 @@ ${partiesBlock}
         <tr>
           <th>${escape(t.task)}</th>
           <th class="num">${escape(t.sessionsCol)}</th>
-          ${showRoundingNote ? `<th class="num">${escape(t.tracked)}</th>` : ''}
-          <th class="num">${escape(showRoundingNote ? t.billable : t.hours)}</th>
+          ${showTracked ? `<th class="num">${escape(t.tracked)}</th>` : ''}
+          <th class="num">${escape(showTracked ? t.billable : t.hours)}</th>
           <th class="num">${escape(t.rate)}</th>
           <th class="num">${escape(t.net)}</th>
         </tr>
@@ -2875,7 +2935,7 @@ ${partiesBlock}
           <tr>
             <td>${escape(task)}</td>
             <td class="num">${tt.count}</td>
-            ${showRoundingNote ? `<td class="num muted">${fmtHours(tt.ms / 3600000)}</td>` : ''}
+            ${showTracked ? `<td class="num muted">${fmtHours(tt.ms / 3600000)}</td>` : ''}
             <td class="num">${fmtHours(tt.billableMs / 3600000)}</td>
             <td class="num muted">${fmtEUR(tt.rate)}/h</td>
             <td class="num">${fmtEUR(tt.earnings)}</td>
@@ -2884,18 +2944,18 @@ ${partiesBlock}
         <tr class="totals-row">
           <td>${escape(showVat ? t.subtotalNet : t.totalAmount)}</td>
           <td class="num">${billableEntriesCount}</td>
-          ${showRoundingNote ? `<td class="num muted">${fmtHours(billableTotalMs / 3600000)}</td>` : ''}
+          ${showTracked ? `<td class="num muted">${fmtHours(billableTotalMs / 3600000)}</td>` : ''}
           <td class="num">${fmtHours(billableTotalHours)}</td>
           <td></td>
           <td class="num">${fmtEUR(totalNet)}</td>
         </tr>
         ${showVat ? `
           <tr class="totals-vat">
-            <td colspan="${showRoundingNote ? 5 : 4}">${escape(t.vatLabel(vat))}</td>
+            <td colspan="${showTracked ? 5 : 4}">${escape(t.vatLabel(vat))}</td>
             <td class="num">${fmtEUR(totalVatAmount)}</td>
           </tr>
           <tr class="totals-gross">
-            <td colspan="${showRoundingNote ? 5 : 4}">${escape(t.totalInclVat)}</td>
+            <td colspan="${showTracked ? 5 : 4}">${escape(t.totalInclVat)}</td>
             <td class="num">${fmtEUR(totalGross)}</td>
           </tr>
         ` : ''}
@@ -2910,10 +2970,10 @@ ${partiesBlock}
       <thead>
         <tr>
           ${showDates ? `<th style="width: 70px;">${escape(t.date)}</th>` : ''}
-          ${showTimes ? `<th style="width: 90px;">${escape(t.time)}</th>` : ''}
+          ${showEntryTimes ? `<th style="width: 90px;">${escape(t.time)}</th>` : ''}
           <th>${escape(showNotes ? t.taskNote : t.taskOnly)}</th>
-          <th class="num" style="width: 70px;">${escape(t.tracked)}</th>
-          ${showRoundingNote ? `<th class="num" style="width: 70px;">${escape(t.billable)}</th>` : ''}
+          ${showTracked ? `<th class="num" style="width: 70px;">${escape(t.tracked)}</th>` : ''}
+          <th class="num" style="width: 70px;">${escape(showTracked ? t.billable : t.tracked)}</th>
           <th class="num" style="width: 60px;">${escape(t.rate)}</th>
           <th class="num" style="width: 80px;">${escape(t.net)}</th>
         </tr>
@@ -2921,20 +2981,20 @@ ${partiesBlock}
       <tbody>
         ${entries.map(e => {
     const rate = getRate(e.client, e.task, rates, clientRates);
-    const billableMs = roundedDuration(e.duration, rounding);
+    const billableMs = billableDuration(e, rounding);
     const standardValue = calcStandardValue(e, rates, clientRates, rounding, tempClientRounding);
     const earned = calcEarnings(e, rates, clientRates, rounding, tempClientRounding);
     const rowClass = e.free ? 'free-row' : '';
     return `
             <tr class="${rowClass}">
               ${showDates ? `<td>${fmtDate(e.start)}</td>` : ''}
-              ${showTimes ? `<td class="muted">${formatTime(e.start)}–${formatTime(e.end)}</td>` : ''}
+              ${showEntryTimes ? `<td class="muted">${formatTime(e.start)}–${formatTime(e.end)}</td>` : ''}
               <td>
                 <div>${escape(e.task)}${e.free ? `<span class="free-badge">${escape(t.complimentaryBadge)}</span>` : ''}</div>
                 ${showNotes && e.note ? `<div class="note">${escape(e.note)}</div>` : ''}
               </td>
-              <td class="num ${showRoundingNote ? 'muted' : ''}">${formatDuration(e.duration)}</td>
-              ${showRoundingNote ? `<td class="num">${formatDuration(billableMs)}</td>` : ''}
+              ${showTracked ? `<td class="num muted">${formatDuration(e.duration)}</td>` : ''}
+              <td class="num">${formatDuration(billableMs)}</td>
               <td class="num muted">${fmtEUR(rate)}</td>
               <td class="num">
                 ${e.free

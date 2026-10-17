@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   round2, getRate, getVat, getRounding, roundedDuration,
+  AI_FACTOR, aiAdjusted, billableDuration,
   calcEarnings, calcStandardValue, timerElapsed, normalizeTimer, buildInvoiceLines,
 } from './billing.js';
 
@@ -36,6 +37,47 @@ describe('roundedDuration', () => {
     expect(roundedDuration(15 * 60000, 15)).toBe(15 * 60000);
     expect(roundedDuration(61 * 60000, 0)).toBe(61 * 60000);
     expect(roundedDuration(1, 15)).toBe(15 * 60000);
+  });
+});
+
+describe('AI factor', () => {
+  it('scales only when the flag is on', () => {
+    expect(aiAdjusted(H, false)).toBe(H);
+    expect(aiAdjusted(H, undefined)).toBe(H);
+    expect(aiAdjusted(H, true)).toBe(H * AI_FACTOR);
+  });
+  it('scales before rounding, so the block boundary still means something', () => {
+    // 50 min AI → 75 min → already on a 15-minute block, so it must not jump to 90
+    const e = { duration: 50 * 60000, ai: true };
+    expect(billableDuration(e, 15)).toBe(75 * 60000);
+    // scaling after rounding would give 60 → 90; make sure we did not do that
+    expect(billableDuration(e, 15)).not.toBe(90 * 60000);
+  });
+  it('leaves non-AI entries exactly as before', () => {
+    const e = { duration: 61 * 60000 };
+    expect(billableDuration(e, 15)).toBe(roundedDuration(61 * 60000, 15));
+    expect(billableDuration(e, 0)).toBe(61 * 60000);
+  });
+  it('bills AI work at the scaled time', () => {
+    const e = { client: 'X', task: 'Post-production', duration: 2 * H, ai: true }; // 2h → 3h @ 30
+    expect(calcEarnings(e, rates, clientRates, 0, {})).toBe(90);
+    expect(calcStandardValue(e, rates, clientRates, 0, {})).toBe(90);
+  });
+  it('free beats AI — complimentary work is still €0', () => {
+    const e = { client: 'X', task: 'Post-production', duration: 2 * H, ai: true, free: true };
+    expect(calcEarnings(e, rates, clientRates, 0, {})).toBe(0);
+    expect(calcStandardValue(e, rates, clientRates, 0, {})).toBe(90); // the value it would have had
+  });
+  it('carries the flag through invoice lines', () => {
+    const cfg = { rates, clientRates, vat: 0, clientVat: {}, rounding: 0, clientRounding: {}, includeFree: false };
+    const { lines, totalNet } = buildInvoiceLines(
+      [{ client: 'X', task: 'Post-production', project: 'P', duration: 2 * H, ai: true }], cfg);
+    expect(lines[0].hours).toBe(3);
+    expect(totalNet).toBe(90);
+  });
+  it('normalizeTimer keeps the flag', () => {
+    expect(normalizeTimer({ client: 'X', task: 'T', startedAt: 1, ai: true }).ai).toBe(true);
+    expect(normalizeTimer({ client: 'X', task: 'T', startedAt: 1 }).ai).toBe(false);
   });
 });
 
