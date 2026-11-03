@@ -2,7 +2,298 @@
 @tailwind components;
 @tailwind utilities;
 
-body {
+/* ==========================================================================
+   Design tokens. Colors are RGB channels so Tailwind opacity modifiers work.
+   Theme: <html data-theme="light|dark"> (set by src/lib/theme.js and the
+   inline script in index.html). Without the attribute the OS preference wins.
+   Full contract: .gauntlet/DESIGN.md
+   ========================================================================== */
+
+:root,
+[data-theme="light"] {
+  color-scheme: light;
+
+  --canvas: 245 245 243;
+  --sidebar: 250 250 249;
+  --sidebar-fg: 28 28 32;
+  --sidebar-muted: 98 98 106;
+  --sidebar-hover: 20 20 25;
+  --sidebar-active: 255 255 255;
+  --sidebar-border: 228 228 224;
+
+  --surface: 255 255 255;
+  --surface-2: 250 250 249;
+  --surface-3: 241 241 238;
+  --surface-raised: 255 255 255;
+  --line: 232 232 228;
+  --line-strong: 214 214 209;
+
+  --fg: 23 23 26;
+  --fg-muted: 78 78 86;
+  --fg-subtle: 104 104 112;
+  --fg-faint: 164 164 171;
+
+  --brand: 242 96 12;
+  --brand-hover: 226 84 0;
+  --brand-text: 186 66 0;
+  --brand-soft: 255 240 228;
+  --brand-fg: 255 255 255;
+
+  /* Primary = the neutral "do it" color for buttons and selected states.
+     Orange (brand) is kept for exactly one meaning: start / recording. */
+  --primary: 26 26 30;
+  --primary-hover: 52 52 58;
+  --primary-fg: 255 255 255;
+
+  --ai: 110 86 207;
+  --ai-text: 101 80 185;
+  --ai-soft: 243 240 254;
+  --free: 48 164 108;
+  --free-text: 26 117 77;
+  --free-soft: 231 246 236;
+  --invoiced: 0 144 255;
+  --invoiced-text: 10 104 190;
+  --invoiced-soft: 231 243 254;
+  --danger: 210 48 54;
+  --danger-hover: 188 36 42;
+  --danger-text: 194 36 42;
+  --danger-soft: 254 236 237;
+  --warning: 255 197 61;
+  --warning-text: 160 94 0;
+  --warning-soft: 255 246 210;
+
+  --ring: 37 99 235;
+  --unbilled: 196 120 0;
+
+  --shadow-xs: 0 1px 2px rgb(20 20 25 / 0.05);
+  --shadow-sm: 0 1px 2px rgb(20 20 25 / 0.06), 0 1px 1px rgb(20 20 25 / 0.03);
+  --shadow-card: 0 1px 2px rgb(20 20 25 / 0.04), 0 1px 3px rgb(20 20 25 / 0.03);
+  --shadow-md: 0 6px 16px -4px rgb(20 20 25 / 0.1), 0 2px 4px -2px rgb(20 20 25 / 0.06);
+  --shadow-lg: 0 18px 40px -12px rgb(20 20 25 / 0.2), 0 4px 10px -4px rgb(20 20 25 / 0.08);
+  --shadow-xl: 0 30px 70px -18px rgb(20 20 25 / 0.32), 0 8px 20px -8px rgb(20 20 25 / 0.12);
+  --shadow-brand: 0 8px 18px -6px rgb(242 96 12 / 0.55), inset 0 1px 0 rgb(255 255 255 / 0.22);
+
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --dur-fast: 120ms;
+  --dur-base: 200ms;
+  --dur-slow: 320ms;
+
+  /* Chart series (fallback when a series has no client color) */
+  --chart-1: 26 26 30;
+  --chart-2: 110 86 207;
+  --chart-3: 0 144 255;
+  --chart-4: 48 164 108;
+  --chart-5: 214 64 159;
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --canvas: 12 12 14;
+  --sidebar: 16 16 19;
+  --sidebar-fg: 236 236 240;
+  --sidebar-muted: 146 146 156;
+  --sidebar-hover: 255 255 255;
+  --sidebar-active: 255 255 255;
+  --sidebar-border: 34 34 39;
+
+  --surface: 22 22 25;
+  --surface-2: 27 27 31;
+  --surface-3: 35 35 40;
+  --surface-raised: 30 30 34;
+  --line: 40 40 46;
+  --line-strong: 58 58 65;
+
+  --fg: 237 237 240;
+  --fg-muted: 180 180 189;
+  --fg-subtle: 146 146 156;
+  --fg-faint: 96 96 106;
+
+  --brand: 247 107 21;
+  --brand-hover: 255 128 40;
+  --brand-text: 255 156 82;
+  --brand-soft: 52 30 13;
+  --brand-fg: 255 255 255;
+
+  --primary: 236 236 240;
+  --primary-hover: 255 255 255;
+  --primary-fg: 17 17 20;
+
+  --ai: 124 102 220;
+  --ai-text: 186 167 255;
+  --ai-soft: 38 30 64;
+  --free: 48 164 108;
+  --free-text: 76 214 146;
+  --free-soft: 18 43 32;
+  --invoiced: 0 144 255;
+  --invoiced-text: 112 184 255;
+  --invoiced-soft: 14 38 66;
+  --danger: 210 48 54;
+  --danger-hover: 188 36 42;
+  --danger-text: 255 149 146;
+  --danger-soft: 58 20 25;
+  --warning: 255 197 61;
+  --warning-text: 255 202 22;
+  --warning-soft: 48 34 9;
+
+  --ring: 96 158 255;
+  --unbilled: 245 180 60;
+
+  --shadow-xs: 0 1px 2px rgb(0 0 0 / 0.4);
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.45), 0 0 0 1px rgb(255 255 255 / 0.02);
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 0.35), inset 0 1px 0 rgb(255 255 255 / 0.03);
+  --shadow-md: 0 8px 20px -6px rgb(0 0 0 / 0.6), 0 2px 4px -2px rgb(0 0 0 / 0.4);
+  --shadow-lg: 0 20px 44px -12px rgb(0 0 0 / 0.7), 0 0 0 1px rgb(255 255 255 / 0.04);
+  --shadow-xl: 0 32px 80px -16px rgb(0 0 0 / 0.8), 0 0 0 1px rgb(255 255 255 / 0.05);
+  --shadow-brand: 0 8px 22px -6px rgb(247 107 21 / 0.5), inset 0 1px 0 rgb(255 255 255 / 0.2);
+
+  --chart-1: 236 236 240;
+  --chart-2: 140 118 230;
+  --chart-3: 64 164 255;
+  --chart-4: 61 190 128;
+  --chart-5: 230 92 175;
+}
+
+/* No data-theme yet (first paint before JS): follow the OS. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    color-scheme: dark;
+    --canvas: 12 12 14;
+    --surface: 22 22 25;
+    --fg: 237 237 240;
+    --fg-muted: 180 180 189;
+  }
+}
+
+@layer base {
+  html {
+    font-family: theme("fontFamily.sans");
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+    -webkit-text-size-adjust: 100%;
+  }
+  body {
     margin: 0;
-    background: #020617;
+    background: rgb(var(--canvas));
+    color: rgb(var(--fg));
+    font-size: 14px;
+    line-height: 20px;
+    font-feature-settings: "ss03" 0;
+  }
+  ::selection {
+    background: rgb(var(--ring) / 0.2);
+  }
+  input,
+  select,
+  textarea,
+  button {
+    font: inherit;
+    color: inherit;
+  }
+  input[type="range"] {
+    accent-color: rgb(var(--primary));
+  }
+  /* Native date/time inputs: tint the picker icon in dark mode */
+  [data-theme="dark"] input::-webkit-calendar-picker-indicator {
+    filter: invert(0.8);
+  }
+  /* Quiet scrollbars */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(var(--fg) / 0.16) transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: rgb(var(--fg) / 0.14);
+    border-radius: 999px;
+    border: 3px solid transparent;
+    background-clip: padding-box;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background: rgb(var(--fg) / 0.24);
+    background-clip: padding-box;
+    border: 3px solid transparent;
+  }
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}
+
+@layer components {
+  /* Range slider with a brand fill. Set style="--fill: 40%" from the value. */
+  .tt-range {
+    -webkit-appearance: none;
+    appearance: none;
+    height: 20px;
+    background: transparent;
+  }
+  .tt-range::-webkit-slider-runnable-track {
+    height: 6px;
+    border-radius: 999px;
+    background: linear-gradient(to right, rgb(var(--primary)) var(--fill, 0%), rgb(var(--fg) / 0.12) var(--fill, 0%));
+  }
+  .tt-range::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    margin-top: -6px;
+    width: 18px;
+    height: 18px;
+    border-radius: 999px;
+    background: #fff;
+    border: 1px solid rgb(var(--line-strong));
+    box-shadow: 0 1px 3px rgb(0 0 0 / 0.2);
+    transition: transform var(--dur-fast) var(--ease-out);
+  }
+  .tt-range:active::-webkit-slider-thumb {
+    transform: scale(1.12);
+  }
+  .tt-range:focus-visible {
+    outline: none;
+  }
+  .tt-range:focus-visible::-webkit-slider-thumb {
+    box-shadow: 0 0 0 4px rgb(var(--ring) / 0.28);
+  }
+  .tt-range::-moz-range-track {
+    height: 6px;
+    border-radius: 999px;
+    background: rgb(var(--fg) / 0.12);
+  }
+  .tt-range::-moz-range-progress {
+    height: 6px;
+    border-radius: 999px;
+    background: rgb(var(--primary));
+  }
+  .tt-range::-moz-range-thumb {
+    width: 18px;
+    height: 18px;
+    border-radius: 999px;
+    background: #fff;
+    border: 1px solid rgb(var(--line-strong));
+  }
+}
+
+@layer utilities {
+  .tnum {
+    font-variant-numeric: tabular-nums;
+  }
+  .text-balance {
+    text-wrap: balance;
+  }
+  /* Hairline inner highlight for raised surfaces in dark mode */
+  .ring-hairline {
+    box-shadow: inset 0 0 0 1px rgb(var(--line));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

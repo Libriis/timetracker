@@ -82,6 +82,16 @@ export function round2(n) {
   return Math.round((n + Number.EPSILON) * 100) / 100;
 }
 
+/**
+ * VAT for a net amount, rounded half up to the cent. Works in whole cents, so
+ * 602.50 at 23 % gives 138.58 (138.575 rounded up), never 138.57 from float drift.
+ */
+export function vatOf(net, pct) {
+  const cents = Math.round((Number(net) || 0) * 100);
+  const v = cents * (Number(pct) || 0) / 100;
+  return Math.round(v + (v >= 0 ? 1e-9 : -1e-9)) / 100;
+}
+
 /** Net earnings for an entry (€0 when free). */
 export function calcEarnings(entry, rates, clientRates, defaultRounding, clientRounding) {
   if (entry.free) return 0;
@@ -142,7 +152,7 @@ export function buildInvoiceLines(entries, cfg) {
   const lines = [...map.values()].map(g => {
     const hours = g.billableMs / 3600000;
     const net = g.free ? 0 : round2(hours * g.rate);
-    const vatAmt = round2(net * g.vatPct / 100);
+    const vatAmt = vatOf(net, g.vatPct);
     return {
       desc: `${multiClient ? g.client + ' — ' : ''}${g.project ? g.project + ' — ' : ''}${g.task}${g.free ? ' (complimentary)' : ''}`,
       client: g.client, project: g.project, task: g.task, free: g.free,
@@ -152,4 +162,33 @@ export function buildInvoiceLines(entries, cfg) {
   const totalNet = round2(lines.reduce((s, l) => s + l.net, 0));
   const totalVat = round2(lines.reduce((s, l) => s + l.vatAmt, 0));
   return { lines, totalNet, totalVat, totalGross: round2(totalNet + totalVat), totalHours: lines.reduce((s, l) => s + l.hours, 0) };
+}
+
+/**
+ * THE one rule for money totals, used by every screen and by the PDF invoice so the
+ * same entries always show the same cents everywhere (Dashboard, Log, Reports, PDF).
+ * Per client: net = round2(sum of calcEarnings), VAT = vatOf(net, client VAT %) (whole cents, half up),
+ * gross = net + VAT (VAT on the rounded base, as on a Slovak invoice).
+ * Several clients: the per-client figures are added up. Free entries add 0.
+ * Invoice lines (buildInvoiceLines) round per line so qty x price is exact; their sum
+ * can differ from this by a few cents, and the invoice-lines UI should say so.
+ * @returns {{ net: number, vat: number, gross: number, clients: Array<{client: string, net: number, vatPct: number, vat: number, gross: number}> }}
+ */
+export function billingTotals(entries, cfg) {
+  const { rates, clientRates, vat, clientVat, rounding, clientRounding } = cfg;
+  const byClient = new Map();
+  for (const e of entries || []) {
+    byClient.set(e.client, (byClient.get(e.client) || 0) + calcEarnings(e, rates, clientRates, rounding, clientRounding));
+  }
+  let net = 0, vatSum = 0;
+  const clients = [];
+  for (const [client, sum] of byClient) {
+    const vatPct = getVat(client, vat, clientVat);
+    const n = round2(sum);
+    const v = vatOf(n, vatPct);
+    clients.push({ client, net: n, vatPct, vat: v, gross: round2(n + v) });
+    net += n; vatSum += v;
+  }
+  net = round2(net); vatSum = round2(vatSum);
+  return { net, vat: vatSum, gross: round2(net + vatSum), clients };
 }

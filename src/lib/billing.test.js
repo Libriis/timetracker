@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   round2, getRate, getVat, getRounding, roundedDuration,
   AI_FACTOR, aiAdjusted, billableDuration,
-  calcEarnings, calcStandardValue, timerElapsed, normalizeTimer, buildInvoiceLines,
+  calcEarnings, calcStandardValue, timerElapsed, normalizeTimer, buildInvoiceLines, billingTotals, vatOf,
 } from './billing.js';
 
 const rates = { 'Post-production': 30, 'Pre-production': 15 };
@@ -144,5 +144,55 @@ describe('buildInvoiceLines', () => {
     const free = lines.find(l => l.free);
     expect(free).toBeTruthy();
     expect(free.net).toBe(0);
+  });
+});
+
+describe('billingTotals (the one rule for totals)', () => {
+  const cfg = { rates, clientRates, vat: 23, clientVat, rounding: 0, clientRounding: {} };
+  it('rounds the net per client, then VAT on that base', () => {
+    // 3 entries of 20 min at 30 €/h = 10.00 each -> net 30.00, VAT 6.90, gross 36.90
+    const es = [0, 1, 2].map(i => ({ id: 'x' + i, client: 'A', task: 'Post-production', duration: H / 3, start: 0, end: H / 3 }));
+    const t = billingTotals(es, cfg);
+    expect(t.net).toBe(30);
+    expect(t.vat).toBe(6.9);
+    expect(t.gross).toBe(36.9);
+  });
+  it('uses per-client VAT and adds clients up', () => {
+    const es = [
+      { id: 'a', client: 'A', task: 'Post-production', duration: H, start: 0, end: H },      // 30.00 + 23%
+      { id: 'b', client: 'NoVat', task: 'Post-production', duration: H, start: 0, end: H },  // 30.00 + 0%
+    ];
+    const t = billingTotals(es, cfg);
+    expect(t.net).toBe(60);
+    expect(t.vat).toBe(6.9);
+    expect(t.gross).toBe(66.9);
+    expect(t.clients.find(c => c.client === 'NoVat').vat).toBe(0);
+  });
+  it('gives free entries no money and handles an empty list', () => {
+    const es = [{ id: 'f', client: 'A', task: 'Post-production', duration: H, free: true, start: 0, end: H }];
+    expect(billingTotals(es, cfg).gross).toBe(0);
+    expect(billingTotals([], cfg)).toEqual({ net: 0, vat: 0, gross: 0, clients: [] });
+  });
+  it('matches the per-client PDF math to the cent on odd minutes', () => {
+    const es = [7, 13, 29, 41].map((m, i) => ({ id: 'o' + i, client: 'A', task: 'Pre-production', duration: m * 60000, start: 0, end: m * 60000 }));
+    const net = round2(es.reduce((s, e) => s + calcEarnings(e, rates, clientRates, 0, {}), 0));
+    const t = billingTotals(es, cfg);
+    expect(t.net).toBe(net);
+    expect(t.gross).toBe(round2(net + round2(net * 0.23)));
+  });
+});
+
+describe('vatOf (whole-cent VAT, half up)', () => {
+  it('rounds .5 cents up where float math would round down', () => {
+    expect(vatOf(602.5, 23)).toBe(138.58);
+    expect(vatOf(100, 23)).toBe(23);
+    expect(vatOf(0, 23)).toBe(0);
+    expect(vatOf(30, 0)).toBe(0);
+  });
+  it('matches exact decimal math for every net from 0.01 to 20,000.00 at 23 %', () => {
+    for (let c = 1; c <= 2000000; c += 7) {
+      const exact = Math.floor((c * 23 + 50) / 100) / 100;
+      expect(vatOf(c / 100, 23)).toBe(exact);
+    }
   });
 });

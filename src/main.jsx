@@ -1,7 +1,13 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
+import "@fontsource-variable/geist";
+import "@fontsource-variable/geist-mono";
 import App from "./App.jsx";
 import "./index.css";
+import { applyTheme, readThemePref, resolveTheme } from "./lib/theme.js";
+
+// Apply the saved / OS theme before the first render (index.html does the same even earlier).
+try { applyTheme(resolveTheme(readThemePref())); } catch (e) { /* default light tokens */ }
 
 // Storage shim — makes window.storage work on top of localStorage
 window.storage = {
@@ -35,18 +41,18 @@ class ErrorBoundary extends React.Component {
   render() {
     if (this.state.error) {
       return (
-        <div style={{ minHeight: "100vh", background: "#020617", color: "#e2e8f0", display: "flex", alignItems: "center", justifyContent: "center", padding: 24, fontFamily: "system-ui, sans-serif" }}>
+        <div style={{ minHeight: "100vh", background: "rgb(var(--canvas))", color: "rgb(var(--fg))", display: "flex", alignItems: "center", justifyContent: "center", padding: 24, fontFamily: "inherit" }}>
           <div style={{ maxWidth: 480, textAlign: "center" }}>
             <h1 style={{ fontSize: 18, fontWeight: 600, marginBottom: 8 }}>Something went wrong</h1>
-            <p style={{ fontSize: 14, color: "#94a3b8", marginBottom: 4 }}>
+            <p style={{ fontSize: 14, color: "rgb(var(--fg-muted))", marginBottom: 4 }}>
               The app hit an unexpected error. Your tracked data is safe on this device.
             </p>
-            <p style={{ fontSize: 12, color: "#64748b", marginBottom: 20, fontFamily: "monospace", wordBreak: "break-word" }}>
+            <p style={{ fontSize: 12, color: "rgb(var(--fg-subtle))", marginBottom: 20, fontFamily: "monospace", wordBreak: "break-word" }}>
               {String(this.state.error && this.state.error.message || this.state.error)}
             </p>
             <button
               onClick={() => window.location.reload()}
-              style={{ background: "#d97706", color: "white", border: "none", padding: "10px 20px", borderRadius: 8, fontSize: 14, cursor: "pointer" }}
+              style={{ background: "rgb(var(--brand))", color: "white", border: "none", padding: "10px 20px", borderRadius: 8, fontSize: 14, fontWeight: 500, cursor: "pointer" }}
             >
               Reload app
             </button>
