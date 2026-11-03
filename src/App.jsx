@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { Play, Pause, Square, Plus, Trash2, Edit2, Download, X, Check, Clock, BarChart3, List, Settings, RefreshCw, FolderOpen, Building2, TrendingUp } from 'lucide-react';
+import { Play, Pause, Square, Plus, Trash2, Edit2, Download, X, Check, Clock, BarChart3, List, Settings, RefreshCw, FolderOpen, Building2, TrendingUp, Filter, ChevronDown } from 'lucide-react';
 import { writeTextFile, readDir, mkdir, exists, remove, BaseDirectory } from '@tauri-apps/plugin-fs';
 import { appDataDir, join } from '@tauri-apps/api/path';
 import { revealItemInDir } from '@tauri-apps/plugin-opener';
@@ -152,6 +152,7 @@ export default function TimeTracker() {
   const [customEnd, setCustomEnd] = useState('');
   const [filterClient, setFilterClient] = useState('all');
   const [filterBilled, setFilterBilled] = useState('all'); // all | unbilled | invoiced
+  const [excludedTasks, setExcludedTasks] = useState([]); // activities hidden on the Dashboard
 
   const [showManualEntry, setShowManualEntry] = useState(false);
   const [editingEntry, setEditingEntry] = useState(null);
@@ -400,9 +401,15 @@ export default function TimeTracker() {
     return entries.filter(e =>
       e.start >= start && e.start <= end
       && (filterClient === 'all' || e.client === filterClient)
-      && (filterBilled === 'all' || (filterBilled === 'invoiced' ? e.invoiced : !e.invoiced)));
+      && (filterBilled === 'all' || (filterBilled === 'invoiced' ? e.invoiced : !e.invoiced))
+      && !excludedTasks.includes(e.task));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [entries, period, customStart, customEnd, filterClient, filterBilled]);
+  }, [entries, period, customStart, customEnd, filterClient, filterBilled, excludedTasks]);
+
+  // Every activity the filters can offer: the configured list plus any old names still used by entries.
+  const activityOptions = useMemo(
+    () => Array.from(new Set([...tasks, ...entries.map(e => e.task)])),
+    [tasks, entries]);
 
   const projectSuggestions = useMemo(
     () => Array.from(new Set(entries.map(e => e.project).filter(Boolean))),
@@ -503,6 +510,8 @@ export default function TimeTracker() {
     if (filterClient !== 'all') parts.push(filterClient.replace(/[^a-z0-9]+/gi, '-').toLowerCase());
     if (period !== 'all') parts.push(period === 'custom' ? `${customStart || 'start'}_${customEnd || 'end'}` : period);
     if (filterBilled !== 'all') parts.push(filterBilled);
+    const excl = excludedSuffix(excludedTasks, activityOptions);
+    if (excl) parts.push(excl);
     return parts.join('-');
   };
   const exportDashboardCSV = () => exportCSV(filteredEntries, csvFilterSuffix());
@@ -678,6 +687,7 @@ export default function TimeTracker() {
             customEnd={customEnd} setCustomEnd={setCustomEnd}
             filterClient={filterClient} setFilterClient={setFilterClient}
             filterBilled={filterBilled} setFilterBilled={setFilterBilled}
+            activityOptions={activityOptions} excludedTasks={excludedTasks} setExcludedTasks={setExcludedTasks}
             clients={clients}
             totalMs={totalMs} totalBillableMs={totalBillableMs}
             totalEarnings={totalEarnings} totalGross={totalGross}
@@ -687,14 +697,14 @@ export default function TimeTracker() {
           />
         )}
         {view === 'log' && (
-          <Log entries={entries} clients={clients} rates={rates} clientRates={clientRates}
+          <Log entries={entries} clients={clients} activityOptions={activityOptions} rates={rates} clientRates={clientRates}
             vat={vat} clientVat={clientVat}
             rounding={rounding} clientRounding={clientRounding} csvFormat={csvFormat}
             onDelete={confirmDeleteEntry} onEdit={setEditingEntry} onResume={resumeWork} onExport={exportCSV}
             onToggleInvoiced={toggleInvoiced} onBulkInvoiced={setInvoicedBulk} />
         )}
         {view === 'insights' && (
-          <InsightsView entries={entries} rates={rates} clientRates={clientRates}
+          <InsightsView entries={entries} activityOptions={activityOptions} rates={rates} clientRates={clientRates}
             rounding={rounding} clientRounding={clientRounding} />
         )}
         {view === 'settings' && (
@@ -813,7 +823,72 @@ function Select({ label, value, onChange, options }) {
   );
 }
 
-function Dashboard({ period, setPeriod, customStart, setCustomStart, customEnd, setCustomEnd, filterClient, setFilterClient, filterBilled, setFilterBilled, clients, totalMs, totalBillableMs, totalEarnings, totalGross, totalComplimentary, complimentaryCount, byClient, filteredCount, onExport, onExportPDF }) {
+// File-name part for exports when some activities are hidden, e.g. "excl-web-production".
+function excludedSuffix(excluded, options) {
+  const active = excluded.filter(t => options.includes(t));
+  if (active.length === 0) return '';
+  return 'excl-' + active.map(t => t.replace(/[^a-z0-9]+/gi, '-').toLowerCase()).join('-');
+}
+
+// Activity (task) filter: a checkbox list. Unticked activities are hidden.
+// Stores the EXCLUDED names, so a new activity is shown by default.
+function ActivityFilter({ options, excluded, onChange, align = 'left' }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (ev) => { if (ref.current && !ref.current.contains(ev.target)) setOpen(false); };
+    const onKey = (ev) => { if (ev.key === 'Escape') { ev.stopPropagation(); setOpen(false); } };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => { document.removeEventListener('mousedown', onDown); document.removeEventListener('keydown', onKey); };
+  }, [open]);
+
+  const active = excluded.filter(t => options.includes(t));
+  const shown = options.filter(t => !active.includes(t));
+  const label = active.length === 0 ? 'All activities'
+    : shown.length === 0 ? 'No activities'
+    : shown.length === 1 ? `Only ${shown[0]}`
+    : active.length === 1 ? `All except ${active[0]}`
+    : shown.length < active.length ? `${shown.length} of ${options.length} activities`
+    : `All except ${active.length} activities`;
+  const toggle = (t) => onChange(excluded.includes(t) ? excluded.filter(x => x !== t) : [...excluded, t]);
+
+  return (
+    <div ref={ref} className="relative">
+      <button type="button" onClick={() => setOpen(o => !o)}
+        title={active.length > 0 ? `Hidden: ${active.join(', ')}` : 'Filter by activity'}
+        className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm border transition whitespace-nowrap max-w-[16rem] ${active.length > 0 ? 'bg-amber-600/10 border-amber-700/50 text-amber-300' : 'bg-slate-900 border-slate-800 text-slate-200 hover:bg-slate-800'}`}>
+        <Filter className="w-3.5 h-3.5 flex-shrink-0" />
+        <span className="truncate">{label}</span>
+        <ChevronDown className="w-3.5 h-3.5 flex-shrink-0 opacity-60" />
+      </button>
+      {open && (
+        <div className={`absolute z-30 mt-1 w-64 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl shadow-black/50 p-2 ${align === 'right' ? 'right-0' : 'left-0'}`}>
+          <div className="flex items-center justify-between px-2 pb-2 mb-1 border-b border-slate-800">
+            <span className="text-[10px] uppercase tracking-wider text-slate-500">Show activities</span>
+            <button type="button" onClick={() => onChange([])} disabled={active.length === 0}
+              className={`text-xs ${active.length === 0 ? 'text-slate-600 cursor-default' : 'text-amber-400 hover:text-amber-300'}`}>Show all</button>
+          </div>
+          <div className="max-h-72 overflow-y-auto">
+            {options.map(t => (
+              <div key={t} className="group flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-slate-800">
+                <label className="flex items-center gap-2 flex-1 min-w-0 cursor-pointer text-sm">
+                  <input type="checkbox" checked={!excluded.includes(t)} onChange={() => toggle(t)} className="accent-amber-600" />
+                  <span className={`truncate ${excluded.includes(t) ? 'text-slate-500 line-through' : 'text-slate-200'}`}>{t}</span>
+                </label>
+                <button type="button" onClick={() => onChange(options.filter(o => o !== t))} title={`Show only ${t}`}
+                  className="text-[10px] uppercase tracking-wider text-slate-500 hover:text-amber-400 opacity-0 group-hover:opacity-100 focus:opacity-100 transition">Only</button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Dashboard({ period, setPeriod, customStart, setCustomStart, customEnd, setCustomEnd, filterClient, setFilterClient, filterBilled, setFilterBilled, activityOptions, excludedTasks, setExcludedTasks, clients, totalMs, totalBillableMs, totalEarnings, totalGross, totalComplimentary, complimentaryCount, byClient, filteredCount, onExport, onExportPDF }) {
   const sortedClients = Object.entries(byClient).sort((a, b) => b[1].total - a[1].total);
   const todayStr = new Date().toISOString().slice(0, 10);
   const handleSelectCustom = () => {
@@ -835,7 +910,7 @@ function Dashboard({ period, setPeriod, customStart, setCustomStart, customEnd, 
 
   return (
     <div>
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-4">
+      <div className="flex flex-col md:flex-row md:flex-wrap md:items-center md:justify-between gap-3 mb-4">
         <div className="flex flex-wrap gap-1 bg-slate-900 rounded-lg p-1">
           {['today', 'week', 'month', 'all'].map(p => (
             <button key={p} onClick={() => setPeriod(p)}
@@ -861,6 +936,7 @@ function Dashboard({ period, setPeriod, customStart, setCustomStart, customEnd, 
             <option value="unbilled">Unbilled</option>
             <option value="invoiced">Invoiced</option>
           </select>
+          <ActivityFilter options={activityOptions} excluded={excludedTasks} onChange={setExcludedTasks} align="right" />
           <button onClick={onExport}
             className="flex items-center gap-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-200 px-3 py-1.5 rounded-lg text-sm transition">
             <Download className="w-4 h-4" /> CSV
@@ -1047,10 +1123,12 @@ function ClientCard({ client, data, totalMs }) {
   );
 }
 
-function InsightsView({ entries, rates, clientRates, rounding, clientRounding }) {
-  if (entries.length === 0) {
+function InsightsView({ entries: allEntries, activityOptions, rates, clientRates, rounding, clientRounding }) {
+  const [excluded, setExcluded] = useState([]);
+  if (allEntries.length === 0) {
     return <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 text-center text-slate-500">No data yet — track some time to see insights.</div>;
   }
+  const entries = allEntries.filter(e => !excluded.includes(e.task));
   const now = new Date();
   const months = [];
   for (let i = 11; i >= 0; i--) {
@@ -1078,6 +1156,9 @@ function InsightsView({ entries, rates, clientRates, rounding, clientRounding })
 
   return (
     <div className="space-y-6">
+      <div className="flex justify-end">
+        <ActivityFilter options={activityOptions} excluded={excluded} onChange={setExcluded} align="right" />
+      </div>
       <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5">
         <div className="flex items-center justify-between mb-4 gap-3">
           <div className="text-sm font-medium text-white">Monthly earnings — last 12 months</div>
@@ -1221,9 +1302,10 @@ function InvoiceLinesModal({ entries, rates, clientRates, vat, clientVat, roundi
   );
 }
 
-function Log({ entries, clients, rates, clientRates, vat, clientVat, rounding, clientRounding, csvFormat, onDelete, onEdit, onResume, onExport, onToggleInvoiced, onBulkInvoiced }) {
+function Log({ entries, clients, activityOptions, rates, clientRates, vat, clientVat, rounding, clientRounding, csvFormat, onDelete, onEdit, onResume, onExport, onToggleInvoiced, onBulkInvoiced }) {
   const [fClient, setFClient] = useState('all');
   const [fProject, setFProject] = useState('all');
+  const [fExcluded, setFExcluded] = useState([]); // hidden activities
   const [fPeriod, setFPeriod] = useState('all');
   const [fFrom, setFFrom] = useState('');
   const [fTo, setFTo] = useState('');
@@ -1258,6 +1340,7 @@ function Log({ entries, clients, rates, clientRates, vat, clientVat, rounding, c
   const filtered = entries.filter(e => {
     if (fClient !== 'all' && e.client !== fClient) return false;
     if (fProject !== 'all' && (e.project || '') !== fProject) return false;
+    if (fExcluded.includes(e.task)) return false;
     if (fBilled === 'unbilled' && e.invoiced) return false;
     if (fBilled === 'invoiced' && !e.invoiced) return false;
     if (e.start < from || e.start > to) return false;
@@ -1273,6 +1356,8 @@ function Log({ entries, clients, rates, clientRates, vat, clientVat, rounding, c
     if (fPeriod === 'custom') parts.push(`${fFrom || 'start'}_${fTo || 'end'}`);
     else if (fPeriod !== 'all') parts.push(fPeriod);
     if (fBilled !== 'all') parts.push(fBilled);
+    const excl = excludedSuffix(fExcluded, activityOptions);
+    if (excl) parts.push(excl);
     if (q) parts.push('search');
     return parts.join('-');
   };
@@ -1300,7 +1385,7 @@ function Log({ entries, clients, rates, clientRates, vat, clientVat, rounding, c
   });
   return (
     <div>
-      <div className="flex flex-col sm:flex-row sm:items-center gap-2 mb-3">
+      <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-2 mb-3">
         <select value={fClient} onChange={(e) => setFClient(e.target.value)}
           className="bg-slate-900 border border-slate-800 rounded-lg px-3 py-1.5 text-sm">
           <option value="all">All clients</option>
@@ -1313,6 +1398,7 @@ function Log({ entries, clients, rates, clientRates, vat, clientVat, rounding, c
             {projectOptions.map(p => <option key={p} value={p}>{p}</option>)}
           </select>
         )}
+        <ActivityFilter options={activityOptions} excluded={fExcluded} onChange={setFExcluded} />
         <select value={fPeriod} onChange={(e) => selectPeriod(e.target.value)}
           className="bg-slate-900 border border-slate-800 rounded-lg px-3 py-1.5 text-sm">
           <option value="all">All time</option>
@@ -1328,7 +1414,7 @@ function Log({ entries, clients, rates, clientRates, vat, clientVat, rounding, c
           <option value="invoiced">Invoiced</option>
         </select>
         <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search notes, task, client…"
-          className="flex-1 min-w-0 bg-slate-900 border border-slate-800 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:border-amber-600 placeholder:text-slate-600" />
+          className="flex-1 min-w-[12rem] bg-slate-900 border border-slate-800 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:border-amber-600 placeholder:text-slate-600" />
         <button onClick={() => onExport(filtered, exportSuffix())}
           className="flex items-center gap-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-200 px-3 py-1.5 rounded-lg text-sm transition whitespace-nowrap">
           <Download className="w-4 h-4" /> Export CSV
