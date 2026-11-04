@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { AI_FACTOR } from '../../lib/billing.js';
 import { BarChart3, ChevronDown, Download, FileText, Gift } from 'lucide-react';
 import { clientColor } from '../../lib/colors.js';
 import { formatEUR, formatHM, formatHoursNum, isoDay } from '../../lib/format.js';
@@ -400,7 +401,7 @@ export function Dashboard({ period, setPeriod, customStart, setCustomStart, cust
               rows={tree} groupBy={groupBy} roundingOf={roundingOf} vatBadgeOf={vatBadgeOf}
               total={{ ms: totalMs, billableMs: totalBillableMs, net: totalEarnings, gross: totalGross }} />
             <p className="border-t border-line px-5 py-3 text-xs leading-5 text-fg-subtle">
-              Billable time counts AI-assisted work ×1.5{rounding > 0 ? ` and rounds each entry up to ${rounding}-minute blocks, unless a client has its own rule` : ''}. Complimentary work bills €0.{' '}
+              Billable time counts AI-assisted work ×{AI_FACTOR}{rounding > 0 ? ` and rounds each entry up to ${rounding}-minute blocks, unless a client has its own rule` : ''}. Complimentary work bills €0.{' '}
               Incl. VAT adds <span className="font-medium text-fg-muted tnum">{vatInfo.usual}%</span>
               {vatInfo.others.length > 0 && <> (<span className="tnum">{vatInfo.others.join(', ')}</span>)</>}, rounded once per client.
             </p>

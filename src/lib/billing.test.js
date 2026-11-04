@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   round2, getRate, getVat, getRounding, roundedDuration,
-  AI_FACTOR, aiAdjusted, billableDuration,
+  AI_FACTOR, aiAdjusted, billableDuration, setAiFactor, normalizeAiFactor, DEFAULT_AI_FACTOR,
   calcEarnings, calcStandardValue, timerElapsed, normalizeTimer, buildInvoiceLines, billingTotals, vatOf,
 } from './billing.js';
 
@@ -194,5 +194,34 @@ describe('vatOf (whole-cent VAT, half up)', () => {
       const exact = Math.floor((c * 23 + 50) / 100) / 100;
       expect(vatOf(c / 100, 23)).toBe(exact);
     }
+  });
+});
+
+describe('AI factor setting (applies to every AI entry)', () => {
+  it('defaults to 1.5 and rejects invalid values', () => {
+    expect(DEFAULT_AI_FACTOR).toBe(1.5);
+    expect(normalizeAiFactor('2')).toBe(2);
+    expect(normalizeAiFactor(1.255)).toBe(1.26);
+    expect(normalizeAiFactor(0.5)).toBe(1.5);
+    expect(normalizeAiFactor(9)).toBe(1.5);
+    expect(normalizeAiFactor('abc')).toBe(1.5);
+    expect(normalizeAiFactor(undefined)).toBe(1.5);
+  });
+  it('changes billable time and money for old and new AI entries alike', () => {
+    const e = { id: 'a', client: 'A', task: 'Post-production', duration: H, ai: true, start: 0, end: H };
+    try {
+      expect(setAiFactor(2)).toBe(2);
+      expect(AI_FACTOR).toBe(2);
+      expect(aiAdjusted(H, true)).toBe(2 * H);
+      expect(calcEarnings(e, rates, clientRates, 0, {})).toBe(60);
+      expect(billingTotals([e], { rates, clientRates, vat: 23, clientVat, rounding: 0, clientRounding: {} }).net).toBe(60);
+      setAiFactor(1.25);
+      expect(calcEarnings(e, rates, clientRates, 0, {})).toBe(37.5);
+      // AI off is never scaled
+      expect(calcEarnings({ ...e, ai: false }, rates, clientRates, 0, {})).toBe(30);
+    } finally {
+      setAiFactor(DEFAULT_AI_FACTOR);
+    }
+    expect(AI_FACTOR).toBe(1.5);
   });
 });

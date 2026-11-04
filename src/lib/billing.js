@@ -32,8 +32,29 @@
  * AI-assisted work lands faster than doing it by hand, so the stopwatch undersells it.
  * Billable time is the tracked time scaled by this factor — the client buys the result,
  * not the stopwatch. Tracked time is never overwritten, so the flag stays reversible.
+ *
+ * The factor is a user setting (Settings, stored under tracker:aiFactor, default 1.5) and
+ * applies to EVERY AI entry, old and new: changing it re-prices past work too (the user's choice).
+ * AI_FACTOR is a live ES-module binding: setAiFactor() updates it for every importer, so labels
+ * ("AI ×1.5") and every billing calculation follow the setting without passing it around.
  */
-export const AI_FACTOR = 1.5;
+export const DEFAULT_AI_FACTOR = 1.5;
+export const MIN_AI_FACTOR = 1;
+export const MAX_AI_FACTOR = 5;
+export let AI_FACTOR = DEFAULT_AI_FACTOR;
+
+/** A valid factor (1 to 5, two decimals) or the default for anything else. */
+export function normalizeAiFactor(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n) || n < MIN_AI_FACTOR || n > MAX_AI_FACTOR) return DEFAULT_AI_FACTOR;
+  return round2(n);
+}
+
+/** Set the AI factor used by every calculation. Returns the value actually used. */
+export function setAiFactor(v) {
+  AI_FACTOR = normalizeAiFactor(v);
+  return AI_FACTOR;
+}
 
 /** Tracked ms scaled for AI assistance. Plain ms when the flag is off. */
 export function aiAdjusted(durationMs, ai) {

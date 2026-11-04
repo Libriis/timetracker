@@ -1,6 +1,7 @@
 import { Building2, Database, Palette, Receipt, Users } from 'lucide-react';
 import { Page, PageHeader } from '../../components/shell/PageHeader.jsx';
 import { cn } from '../../lib/cn.js';
+import { AiFactorEditor } from './AiFactorEditor.jsx';
 import { AppearanceCard } from './AppearanceCard.jsx';
 import { ClientOverrides } from './ClientOverrides.jsx';
 import { CsvFormatEditor } from './CsvFormatEditor.jsx';
@@ -33,7 +34,7 @@ function Section({ id, title, description, children }) {
   );
 }
 
-export function SettingsView({ clients, tasks, rates, clientRates, vat, clientVat, rounding, clientRounding, descriptions, issuer, csvFormat, onSaveClients, onSaveTasks, onSaveRates, onSaveClientRates, onSaveVat, onSaveClientVat, onSaveRounding, onSaveClientRounding, onSaveDescriptions, onSaveIssuer, onSaveCsvFormat, entryCount, onExportBackup, onImportBackup, onRequestConfirm, pushToast, themePref, onThemeChange }) {
+export function SettingsView({ clients, tasks, rates, clientRates, vat, clientVat, rounding, clientRounding, descriptions, issuer, csvFormat, aiFactor, onSaveAiFactor, onSaveClients, onSaveTasks, onSaveRates, onSaveClientRates, onSaveVat, onSaveClientVat, onSaveRounding, onSaveClientRounding, onSaveDescriptions, onSaveIssuer, onSaveCsvFormat, entryCount, onExportBackup, onImportBackup, onRequestConfirm, pushToast, themePref, onThemeChange }) {
   const jump = (id) => document.getElementById(`settings-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   return (
     <Page>
@@ -56,6 +57,7 @@ export function SettingsView({ clients, tasks, rates, clientRates, vat, clientVa
             <div className="grid gap-4 md:grid-cols-2">
               <VatEditor vat={vat} onSaveVat={onSaveVat} />
               <RoundingEditor rounding={rounding} onSaveRounding={onSaveRounding} />
+              <AiFactorEditor aiFactor={aiFactor} onSaveAiFactor={onSaveAiFactor} pushToast={pushToast} className="md:col-span-2" />
             </div>
             <RateEditor tasks={tasks} rates={rates} onSaveRates={onSaveRates} />
             <ClientOverrides clients={clients} tasks={tasks} rates={rates} clientRates={clientRates}

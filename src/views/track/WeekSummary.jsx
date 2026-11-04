@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { Play } from 'lucide-react';
-import { billableDuration, billingTotals, getRounding } from '../../lib/billing.js';
+import { billableDuration, billingTotals, getRounding, AI_FACTOR } from '../../lib/billing.js';
 import { cn } from '../../lib/cn.js';
 import { formatClock, formatEUR, formatHM, isoDay, UI_LOCALE } from '../../lib/format.js';
 import { useNow } from '../../lib/useNow.js';
@@ -99,7 +99,7 @@ export function WeekSummary({ entries, timers = [], rates, clientRates, rounding
           <dt className="text-xs text-fg-subtle">Earned, net</dt>
           {/* Five-figure weeks step down a size so the amount never runs into the next column. */}
           <dd className={cn('mt-0.5 font-semibold leading-8 tracking-[-0.01em] text-fg', earned >= 10000 ? 'text-xl' : 'text-2xl')}><Amount value={earned} /></dd>
-          <dd className="mt-0.5 text-xs text-fg-subtle tnum" title={`Hours that bill this week, after AI ×1.5 and rounding`}>{formatHM(s.weekBillable + liveBillable)} billable</dd>
+          <dd className="mt-0.5 text-xs text-fg-subtle tnum" title={`Hours that bill this week, after AI ×${AI_FACTOR} and rounding`}>{formatHM(s.weekBillable + liveBillable)} billable</dd>
         </div>
       </dl>
 

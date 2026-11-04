@@ -139,7 +139,7 @@ export const TrackPanel = forwardRef(function TrackPanel({
         </div>
         <StartButton onStart={() => start(false)} />
         <DropdownMenu>
-          <Tooltip content="More: AI ×1.5, past entry, search">
+          <Tooltip content={`More: AI ×${AI_FACTOR}, past entry, search`}>
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" size="icon" aria-label="More timer options"><MoreHorizontal /></Button>
             </DropdownMenuTrigger>

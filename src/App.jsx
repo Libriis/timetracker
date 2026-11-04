@@ -4,7 +4,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { check } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { writeDiskBackup } from './lib/backup.js';
-import { round2, getRate, getVat, getRounding, billableDuration, calcEarnings, calcStandardValue, timerElapsed, normalizeTimer, billingTotals } from './lib/billing.js';
+import { round2, getRate, getVat, getRounding, billableDuration, calcEarnings, calcStandardValue, timerElapsed, normalizeTimer, billingTotals, setAiFactor, DEFAULT_AI_FACTOR } from './lib/billing.js';
 import { DEFAULT_CLIENTS, DEFAULT_TASKS, DEFAULT_RATES, DEFAULT_VAT, DEFAULT_CLIENT_RATES, DEFAULT_CLIENT_VAT, DEFAULT_ROUNDING, IDLE_THRESHOLD_S, SCHEMA_VERSION, DEFAULT_CLIENT_ROUNDING, DEFAULT_DESCRIPTIONS, DEFAULT_ISSUER, SEED_ENTRIES } from './lib/constants.js';
 import { formatClock, formatDuration, isoDay } from './lib/format.js';
 import { printReportHTML, buildPDFHTML } from './lib/pdf.js';
@@ -52,6 +52,7 @@ export default function TimeTracker() {
   const [descriptions, setDescriptions] = useState(DEFAULT_DESCRIPTIONS);
   const [issuer, setIssuer] = useState(DEFAULT_ISSUER);
   const [csvFormat, setCsvFormat] = useState('standard'); // 'standard' | 'excel-sk'
+  const [aiFactor, setAiFactorState] = useState(DEFAULT_AI_FACTOR); // AI-assisted billing factor; applies to every AI entry
   const [entries, setEntries] = useState(SEED_ENTRIES);
   const [loading, setLoading] = useState(true);
 
@@ -102,9 +103,11 @@ export default function TimeTracker() {
       };
       const isObj = (x) => x && typeof x === 'object' && !Array.isArray(x);
       try {
-        const keys = ['clients', 'tasks', 'rates', 'clientRates', 'vat', 'clientVat', 'rounding', 'clientRounding', 'descriptions', 'issuer', 'csvFormat', 'entries', 'activeTimer', 'activeTimers'];
+        const keys = ['clients', 'tasks', 'rates', 'clientRates', 'vat', 'clientVat', 'rounding', 'clientRounding', 'descriptions', 'issuer', 'csvFormat', 'entries', 'activeTimer', 'activeTimers', 'aiFactor'];
         const results = await Promise.all(keys.map(k => window.storage.get('tracker:' + k).catch(() => null)));
-        const [c, t, r, cr, v, cv, rd, crd, dsc, iss, csvf, e, at, ats] = results;
+        const [c, t, r, cr, v, cv, rd, crd, dsc, iss, csvf, e, at, ats, aif] = results;
+        // AI factor first, so the very first render after load already bills with it (missing = 1.5).
+        const aifV = parse(aif); if (aifV != null) setAiFactorState(setAiFactor(aifV));
 
         const cV = parse(c); if (Array.isArray(cV)) setClients(cV);
         const tV = parse(t); if (Array.isArray(tV)) setTasks(tV);
@@ -156,10 +159,10 @@ export default function TimeTracker() {
     if (loading || !IS_TAURI) return;
     if (backupRef.current) clearTimeout(backupRef.current);
     backupRef.current = setTimeout(() => {
-      writeDiskBackup({ clients, tasks, rates, clientRates, vat, clientVat, rounding, clientRounding, descriptions, issuer, csvFormat, entries });
+      writeDiskBackup({ clients, tasks, rates, clientRates, vat, clientVat, rounding, clientRounding, descriptions, issuer, csvFormat, aiFactor, entries });
     }, 1500);
     return () => { if (backupRef.current) clearTimeout(backupRef.current); };
-  }, [loading, clients, tasks, rates, clientRates, vat, clientVat, rounding, clientRounding, descriptions, issuer, csvFormat, entries]);
+  }, [loading, clients, tasks, rates, clientRates, vat, clientVat, rounding, clientRounding, descriptions, issuer, csvFormat, aiFactor, entries]);
 
   // The tray "Start / stop timer" item emits this event from Rust; toggle via a ref to avoid stale state.
   useEffect(() => {
@@ -243,6 +246,8 @@ export default function TimeTracker() {
   const saveDescriptions = (n) => saveTo('descriptions', n, setDescriptions);
   const saveIssuer = (n) => saveTo('issuer', n, setIssuer);
   const saveCsvFormat = (n) => saveTo('csvFormat', n, setCsvFormat);
+  // Sets the live factor in billing.js first, then stores it; every screen re-renders with it.
+  const saveAiFactor = (n) => saveTo('aiFactor', setAiFactor(n), setAiFactorState);
   const saveEntries = (n) => saveTo('entries', n, setEntries);
   const saveActiveTimers = (arr) => {
     setActiveTimers(arr);
@@ -443,7 +448,7 @@ export default function TimeTracker() {
     const money = billingTotals(filteredEntries, { rates, clientRates, vat, clientVat, rounding, clientRounding });
     const totalGross = money.gross;
     return { totalMs, totalBillableMs, totalEarnings: money.net, totalComplimentary, complimentaryCount, byClient, totalGross };
-  }, [filteredEntries, rates, clientRates, vat, clientVat, rounding, clientRounding]);
+  }, [filteredEntries, rates, clientRates, vat, clientVat, rounding, clientRounding, aiFactor]);
 
   const exportCSV = (list, suffix) => {
     const data = Array.isArray(list) ? list : entries;
@@ -541,7 +546,7 @@ export default function TimeTracker() {
       app: 'timetracker',
       version: 1,
       exportedAt: new Date().toISOString(),
-      data: { clients, tasks, rates, clientRates, vat, clientVat, rounding, clientRounding, descriptions, issuer, csvFormat, entries }, // invoice hook: issuer (supplier + Bill to details) is in the backup too; csvFormat so a restore keeps every setting
+      data: { clients, tasks, rates, clientRates, vat, clientVat, rounding, clientRounding, descriptions, issuer, csvFormat, aiFactor, entries }, // invoice hook: issuer (supplier + Bill to details) is in the backup too; csvFormat so a restore keeps every setting
     };
     const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -591,6 +596,7 @@ export default function TimeTracker() {
     }
     if (data.issuer && typeof data.issuer === 'object' && !Array.isArray(data.issuer)) saveIssuer({ ...DEFAULT_ISSUER, ...data.issuer }); // invoice hook: older backups have no issuer and keep the current one
     if (data.csvFormat === 'standard' || data.csvFormat === 'excel-sk') saveCsvFormat(data.csvFormat); // older backups have none and keep the current one
+    if (data.aiFactor != null) saveAiFactor(data.aiFactor); // older backups have none and keep the current factor
     saveEntries(validEntries.sort((a, b) => b.start - a.start));
     return validEntries.length;
   };
@@ -618,7 +624,7 @@ export default function TimeTracker() {
           workspace={issuer && issuer.name ? issuer.name : ''} themePref={themePref} onThemeChange={setThemePref} />
 
         <main ref={mainRef} className="relative min-w-0 flex-1 overflow-y-auto" id="main">
-          <Suspense fallback={null}>
+          <Suspense key={'ai-' + aiFactor} fallback={null}>{/* a new AI factor remounts the views so every memo re-prices */}
           {view === 'track' && (
             <TrackView
               activeTimers={activeTimers} onPause={pauseTimer} onResume={resumeTimer} onStop={stopTimer} onToggleAi={toggleTimerAi}
@@ -688,6 +694,7 @@ export default function TimeTracker() {
               onSaveDescriptions={saveDescriptions}
               issuer={issuer} onSaveIssuer={saveIssuer}
               csvFormat={csvFormat} onSaveCsvFormat={saveCsvFormat}
+              aiFactor={aiFactor} onSaveAiFactor={saveAiFactor}
               entryCount={entries.length} onExportBackup={exportBackup} onImportBackup={importBackup}
               onRequestConfirm={requestConfirm} pushToast={pushToast}
               themePref={themePref} onThemeChange={setThemePref} />
