@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   round2, getRate, getVat, getRounding, roundedDuration,
   AI_FACTOR, aiAdjusted, billableDuration, setAiFactor, normalizeAiFactor, DEFAULT_AI_FACTOR,
+  validAiFactor, entryAiFactor, withAiFactor, tidyAiFactor, sharedAiFactor,
   calcEarnings, calcStandardValue, timerElapsed, normalizeTimer, buildInvoiceLines, billingTotals, vatOf,
 } from './billing.js';
 
@@ -223,5 +224,147 @@ describe('AI factor setting (applies to every AI entry)', () => {
       setAiFactor(DEFAULT_AI_FACTOR);
     }
     expect(AI_FACTOR).toBe(1.5);
+  });
+});
+
+describe('per-entry AI factor (aiFactor on an entry or timer)', () => {
+  const cfg = { rates, clientRates, vat: 23, clientVat, rounding: 0, clientRounding: {} };
+  const base = { client: 'A', task: 'Post-production', start: 0, end: H, duration: H, ai: true };
+
+  it('validAiFactor accepts 1 to 5 (two decimals) and nothing else', () => {
+    expect(validAiFactor(2)).toBe(2);
+    expect(validAiFactor('1.3')).toBe(1.3);
+    expect(validAiFactor(1.255)).toBe(1.26);
+    expect(validAiFactor(1)).toBe(1);
+    expect(validAiFactor(5)).toBe(5);
+    for (const bad of [0.99, 5.01, 0, -2, NaN, Infinity, 'abc', '', null, undefined, true, false, {}, []]) {
+      expect(validAiFactor(bad)).toBe(null);
+    }
+  });
+
+  it('an own factor on the entry overrides the setting', () => {
+    expect(entryAiFactor({ ...base, aiFactor: 2 })).toBe(2);
+    expect(billableDuration({ ...base, aiFactor: 2 }, 0)).toBe(2 * H);
+    expect(calcEarnings({ ...base, aiFactor: 2 }, rates, clientRates, 0, {})).toBe(60);
+    expect(calcEarnings({ ...base, aiFactor: 1.25 }, rates, clientRates, 0, {})).toBe(37.5);
+    expect(calcStandardValue({ ...base, free: true, aiFactor: 2 }, rates, clientRates, 0, {})).toBe(60);
+  });
+
+  it('a missing or invalid factor falls back to the setting', () => {
+    expect(entryAiFactor(base)).toBe(AI_FACTOR);
+    for (const bad of [undefined, null, 0, 0.5, 7, 'x', '', true]) {
+      expect(entryAiFactor({ ...base, aiFactor: bad })).toBe(AI_FACTOR);
+      expect(billableDuration({ ...base, aiFactor: bad }, 0)).toBe(H * AI_FACTOR);
+    }
+    expect(entryAiFactor(null)).toBe(AI_FACTOR);
+  });
+
+  it('the factor does nothing while AI is off', () => {
+    const e = { ...base, ai: false, aiFactor: 3 };
+    expect(billableDuration(e, 0)).toBe(H);
+    expect(calcEarnings(e, rates, clientRates, 0, {})).toBe(30);
+  });
+
+  it('scales before rounding, with the own factor too', () => {
+    // 50 min at x1.75 = 87.5 min, then 15-minute blocks = 90 min
+    expect(billableDuration({ ...base, duration: 50 * 60000, aiFactor: 1.75 }, 15)).toBe(90 * 60000);
+  });
+
+  it('aiAdjusted takes an optional factor and keeps the old two-argument call', () => {
+    expect(aiAdjusted(H, true)).toBe(H * AI_FACTOR);
+    expect(aiAdjusted(H, true, 2)).toBe(2 * H);
+    expect(aiAdjusted(H, false, 2)).toBe(H);
+    expect(aiAdjusted(H, true, undefined)).toBe(H * AI_FACTOR);
+    expect(aiAdjusted(H, true, null)).toBe(H * AI_FACTOR);
+    expect(aiAdjusted(H, true, 99)).toBe(H * AI_FACTOR);
+  });
+
+  it('an entry with its own factor keeps its money when the setting changes; one without follows it', () => {
+    const own = { ...base, id: 'own', aiFactor: 2 };
+    const dflt = { ...base, id: 'dflt' };
+    try {
+      setAiFactor(1.5);
+      expect(calcEarnings(own, rates, clientRates, 0, {})).toBe(60);
+      expect(calcEarnings(dflt, rates, clientRates, 0, {})).toBe(45);
+      setAiFactor(3);
+      expect(calcEarnings(own, rates, clientRates, 0, {})).toBe(60);
+      expect(calcEarnings(dflt, rates, clientRates, 0, {})).toBe(90);
+      expect(billingTotals([own, dflt], cfg).net).toBe(150);
+      setAiFactor(1.25);
+      expect(billableDuration(own, 0)).toBe(2 * H);
+      expect(billableDuration(dflt, 0)).toBe(1.25 * H);
+    } finally {
+      setAiFactor(DEFAULT_AI_FACTOR);
+    }
+    expect(AI_FACTOR).toBe(DEFAULT_AI_FACTOR);
+  });
+
+  it('billingTotals, calcEarnings and buildInvoiceLines respect a mix of factors', () => {
+    const list = [
+      { ...base, id: '1', duration: 37 * 60000, aiFactor: 1.25 },
+      { ...base, id: '2', duration: 23 * 60000 }, // the setting (1.5)
+      { ...base, id: '3', duration: 41 * 60000, aiFactor: 2 },
+      { ...base, id: '4', duration: 19 * 60000, ai: false },
+      { ...base, id: '5', duration: 29 * 60000, aiFactor: 1.33, project: 'P' },
+    ];
+    const nets = list.map(e => calcEarnings(e, rates, clientRates, 0, {}));
+    // by hand: billable hours x 30 EUR/h
+    const byHand = [37 * 1.25, 23 * 1.5, 41 * 2, 19, Math.round(29 * 60000 * 1.33) / 60000]
+      .map(min => round2((min / 60) * 30));
+    expect(nets).toEqual(byHand);
+    const t = billingTotals(list, cfg);
+    expect(t.net).toBe(round2(nets.reduce((s, n) => s + n, 0)));
+    expect(t.vat).toBe(vatOf(t.net, 23));
+    const inv = buildInvoiceLines(list, { ...cfg, includeFree: false });
+    const hours = list.reduce((s, e) => s + billableDuration(e, 0), 0) / H;
+    expect(inv.totalHours).toBeCloseTo(hours, 9);
+    const noProj = inv.lines.find(l => !l.project);
+    const ms = list.filter(e => !e.project).reduce((s, e) => s + billableDuration(e, 0), 0);
+    expect(noProj.hours).toBeCloseTo(ms / H, 9);
+    expect(noProj.net).toBe(round2((ms / H) * 30));
+    // lines round per line: never more than a cent per line away from the totals rule
+    expect(Math.abs(inv.totalNet - t.net)).toBeLessThanOrEqual(0.01 * inv.lines.length);
+  });
+
+  it('withAiFactor sets or removes the factor, only on AI work, and keeps unchanged items', () => {
+    const e = { ...base };
+    expect(withAiFactor(e, 2)).toEqual({ ...base, aiFactor: 2 });
+    expect(withAiFactor(e, null)).toBe(e);
+    const own = { ...base, aiFactor: 2 };
+    expect(withAiFactor(own, 2)).toBe(own);
+    expect(withAiFactor(own, null)).toEqual(base);
+    expect('aiFactor' in withAiFactor(own, null)).toBe(false);
+    expect(withAiFactor(own, 'junk')).toEqual(base);
+    expect(withAiFactor({ ...base, ai: false }, 2)).toEqual({ ...base, ai: false });
+    expect(withAiFactor(own, '1.255')).toEqual({ ...base, aiFactor: 1.26 });
+  });
+
+  it('tidyAiFactor drops the factor when AI is off or it is invalid, and leaves old data alone', () => {
+    const old = { ...base };
+    expect(tidyAiFactor(old)).toBe(old);
+    const off = { ...base, ai: false, aiFactor: 2 };
+    expect(tidyAiFactor(off)).toEqual({ ...base, ai: false });
+    expect(tidyAiFactor({ ...base, aiFactor: undefined })).toEqual(base);
+    expect('aiFactor' in tidyAiFactor({ ...base, aiFactor: undefined })).toBe(false);
+    const ok = { ...base, aiFactor: 1.75 };
+    expect(tidyAiFactor(ok)).toBe(ok);
+  });
+
+  it('sharedAiFactor gives one factor for a set, or null when they differ', () => {
+    expect(sharedAiFactor([])).toBe(AI_FACTOR);
+    expect(sharedAiFactor([{ ...base, ai: false, aiFactor: 2 }])).toBe(AI_FACTOR);
+    expect(sharedAiFactor([{ ...base, aiFactor: 2 }, { ...base, aiFactor: 2 }, { ...base, ai: false }])).toBe(2);
+    expect(sharedAiFactor([{ ...base, aiFactor: 2 }, base])).toBe(null);
+    expect(sharedAiFactor([{ ...base, aiFactor: AI_FACTOR }, base])).toBe(AI_FACTOR);
+  });
+
+  it('normalizeTimer keeps a valid own factor on an AI timer and drops it otherwise', () => {
+    const t = { id: 't', client: 'A', task: 'X', ai: true, aiFactor: 2, startedAt: 1, runningSince: 1, accumulatedMs: 0 };
+    expect(normalizeTimer(t).aiFactor).toBe(2);
+    expect('aiFactor' in normalizeTimer({ ...t, ai: false })).toBe(false);
+    expect('aiFactor' in normalizeTimer({ ...t, aiFactor: 9 })).toBe(false);
+    const plain = { ...t };
+    delete plain.aiFactor;
+    expect('aiFactor' in normalizeTimer(plain)).toBe(false);
   });
 });

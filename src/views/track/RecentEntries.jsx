@@ -1,6 +1,6 @@
 import { useMemo, useRef } from 'react';
 import { ArrowRight, Clock3, CopyPlus, Maximize2, MoreHorizontal, Pencil, Play, Plus, Sparkles, Trash2 } from 'lucide-react';
-import { AI_FACTOR, billingTotals, calcEarnings, calcStandardValue, getRate } from '../../lib/billing.js';
+import { billingTotals, calcEarnings, calcStandardValue, entryAiFactor, getRate } from '../../lib/billing.js';
 import { cn } from '../../lib/cn.js';
 import { formatClock, formatEUR, formatTime, isoDay, UI_LOCALE } from '../../lib/format.js';
 import { Badge, ClientDot } from '../../components/ui/Badge.jsx';
@@ -140,7 +140,7 @@ function EntryRow({ e, amount, std, rate, clock, onEdit, onDelete, onResume, onC
       {/* Line 1: what · money · duration (the bold one). */}
       <div className="col-start-1 row-start-1 flex min-w-0 items-center gap-2 self-center">
         <span className={cn('truncate text-base', e.note ? 'font-medium text-fg' : 'text-fg-subtle')}>{e.note || 'No description'}</span>
-        {e.ai && <Badge variant="ai"><Sparkles />AI ×{AI_FACTOR}</Badge>}
+        {e.ai && <Badge variant="ai"><Sparkles />AI ×{entryAiFactor(e)}</Badge>}
         {e.free && <Badge variant="free">Free</Badge>}
         {e.invoiced && <Badge variant="invoiced">Invoiced</Badge>}
       </div>
@@ -155,7 +155,7 @@ function EntryRow({ e, amount, std, rate, clock, onEdit, onDelete, onResume, onC
       <div className="col-span-2 col-start-2 row-start-2 truncate text-right text-xs text-fg-subtle opacity-0 transition-opacity duration-fast tnum group-focus-within:opacity-100 group-hover:opacity-100">
         {formatTime(e.start)}–{formatTime(e.end)}
         <span aria-hidden className="text-fg-faint"> · </span>
-        {e.free ? 'free' : `€${rate}/h${e.ai ? ` ×${AI_FACTOR}` : ''}`}
+        {e.free ? 'free' : `€${rate}/h${e.ai ? ` ×${entryAiFactor(e)}` : ''}`}
       </div>
       <div className="col-start-4 row-span-2 row-start-1 flex items-center justify-end gap-1 self-center">
         {/* Continue is always there (one click to repeat work); the ⋯ menu shows on hover. */}

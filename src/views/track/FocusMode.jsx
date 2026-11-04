@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, useReducedMotion } from 'motion/react';
 import { Minimize2, Pause, Play, Sparkles, Square } from 'lucide-react';
-import { AI_FACTOR, aiAdjusted, getRounding, roundedDuration } from '../../lib/billing.js';
+import { aiAdjusted, entryAiFactor, getRounding, roundedDuration } from '../../lib/billing.js';
 import { cn } from '../../lib/cn.js';
 import { clientColor } from '../../lib/colors.js';
 import { formatClock, formatEUR, formatHM, formatTime, fromIsoDay, isoDay } from '../../lib/format.js';
@@ -111,7 +111,8 @@ export function FocusMode({ timers, focusId, setFocusId, onClose, onPause, onRes
 
   if (!t) return null;
   const { amount, rate, duration } = timerMoney(t, now, billing);
-  const billable = aiAdjusted(duration, t.ai);
+  const aiF = entryAiFactor(t); // this timer's own factor, else the setting
+  const billable = aiAdjusted(duration, t.ai, aiF);
   const blockMin = getRounding(t.client, billing.rounding, billing.clientRounding) || 60;
   const blockMs = blockMin * 60000;
   const billed = roundedDuration(billable, blockMin);
@@ -197,7 +198,7 @@ export function FocusMode({ timers, focusId, setFocusId, onClose, onPause, onRes
           <FocusButton label="Stop and save" k="S" big onClick={() => onStop(t.id)} className="bg-primary text-primary-fg shadow-md hover:bg-primary-hover">
             <Square className="size-5" fill="currentColor" strokeWidth={0} />
           </FocusButton>
-          <FocusButton label={t.ai ? `AI ×${AI_FACTOR} on` : `AI ×${AI_FACTOR}`} k="A" onClick={() => onToggleAi(t.id)} pressed={!!t.ai}
+          <FocusButton label={t.ai ? `AI ×${aiF} on` : `AI ×${aiF}`} k="A" onClick={() => onToggleAi(t.id)} pressed={!!t.ai}
             className={t.ai ? 'border border-ai/35 bg-ai-soft text-ai-text hover:border-ai/55' : 'border border-line-strong bg-surface text-fg-subtle shadow-xs hover:border-fg/25 hover:text-fg'}>
             <Sparkles className="size-5" />
           </FocusButton>

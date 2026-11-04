@@ -1,9 +1,10 @@
 import { useMemo, useRef, useState } from 'react';
 import { Command } from 'cmdk';
 import { Check, ChevronDown, ChevronLeft, Play, Plus, Search, Sparkles, Square, X } from 'lucide-react';
-import { AI_FACTOR } from '../../../lib/billing.js';
+import { AI_FACTOR, validAiFactor } from '../../../lib/billing.js';
 import { cn } from '../../../lib/cn.js';
 import { formatTime } from '../../../lib/format.js';
+import { AiFactorPicker } from '../../../components/ui/AiFactorPicker.jsx';
 import { ClientDot } from '../../../components/ui/Badge.jsx';
 import { Kbd } from '../../../components/ui/Kbd.jsx';
 import { Popover, PopoverContent, PopoverTrigger } from '../../../components/ui/Popover.jsx';
@@ -17,7 +18,9 @@ const itemCls = 'flex h-9 cursor-default items-center gap-2 rounded-lg px-2.5 te
 const STEPS = { client: 'Client', task: 'Activity', project: 'Project' };
 
 // One chip for client, activity and project: [● Client · Activity ▾]. Three short steps in one popover.
-function ContextChip({ clients, activities, projectsOf, client, task, project, ai, onChange, onDone }) {
+// The AI switch sits at the bottom; with AI on, the next timer's factor (aiFactor, null = Default) too.
+function ContextChip({ clients, activities, projectsOf, client, task, project, ai, aiFactor, onChange, onDone }) {
+  const aiF = validAiFactor(aiFactor) ?? AI_FACTOR;
   const [open, setOpen] = useState(false);
   const [step, setStep] = useState('client');
   const [query, setQuery] = useState('');
@@ -101,11 +104,17 @@ function ContextChip({ clients, activities, projectsOf, client, task, project, a
             )}
           </Command.List>
         </Command>
-        <label className="flex cursor-pointer items-center gap-2 border-t border-line px-3 py-2.5 text-sm text-fg">
-          <Sparkles className={cn('size-3.5', ai ? 'text-ai-text' : 'text-fg-subtle')} aria-hidden />
-          <span className="min-w-0 flex-1">AI-assisted, bill ×{AI_FACTOR}</span>
-          <Switch size="sm" tone="ai" checked={!!ai} onCheckedChange={(v) => onChange({ ai: !!v })} aria-label={`AI-assisted, bill ×${AI_FACTOR}`} />
-        </label>
+        <div className="border-t border-line">
+          <label className="flex cursor-pointer items-center gap-2 px-3 py-2.5 text-sm text-fg">
+            <Sparkles className={cn('size-3.5', ai ? 'text-ai-text' : 'text-fg-subtle')} aria-hidden />
+            <span className="min-w-0 flex-1">AI-assisted, bill ×{aiF}</span>
+            {/* AI off also drops the picked factor. */}
+            <Switch size="sm" tone="ai" checked={!!ai} onCheckedChange={(v) => onChange(v ? { ai: true } : { ai: false, aiFactor: null })} aria-label={`AI-assisted, bill ×${aiF}`} />
+          </label>
+          {ai && (
+            <AiFactorPicker value={aiFactor} onChange={(f) => onChange({ aiFactor: f })} label="AI factor for the next timer" className="-mt-1 px-3 pb-3" />
+          )}
+        </div>
       </PopoverContent>
     </Popover>
   );
@@ -163,6 +172,7 @@ export function StartBar({ entries, clients, activities, activeTimers = [], onSt
     task: latest?.task || activities[0] || '',
     project: '',
     ai: false,
+    aiFactor: null, // the next timer's own AI factor, null = Default (follow Settings)
   }));
   // Recent projects per client, newest first.
   const projectIndex = useMemo(() => {
@@ -179,13 +189,14 @@ export function StartBar({ entries, clients, activities, activeTimers = [], onSt
   const clientList = useMemo(() => Array.from(new Set([...(clients || []), ...(ctx.client ? [ctx.client] : [])])), [clients, ctx.client]);
   const activityList = useMemo(() => Array.from(new Set([...(activities || []), ...(ctx.task ? [ctx.task] : [])])), [activities, ctx.task]);
   const canStart = !!(ctx.client && ctx.task && onStart);
+  const ctxAiF = validAiFactor(ctx.aiFactor) ?? AI_FACTOR;
   const typed = note.trim().length > 0;
 
   const start = (viaKeyboard) => {
     if (!canStart) return;
-    onStart({ client: ctx.client, task: ctx.task, project: ctx.project, note: note.trim(), ai: !!ctx.ai });
+    onStart({ client: ctx.client, task: ctx.task, project: ctx.project, note: note.trim(), ai: !!ctx.ai, aiFactor: ctx.ai ? ctx.aiFactor : null }, { applyAi: true });
     setNote('');
-    setCtx(c => ({ ...c, ai: false }));
+    setCtx(c => ({ ...c, ai: false, aiFactor: null }));
     if (viaKeyboard) inputRef.current?.blur();
   };
 
@@ -218,17 +229,17 @@ export function StartBar({ entries, clients, activities, activeTimers = [], onSt
             </span>
           )}
           {ctx.ai && (
-            <Tooltip content={`AI-assisted: bills ×${AI_FACTOR} of the tracked time. Click to turn off.`}>
-              <button type="button" onClick={() => setCtx(c => ({ ...c, ai: false }))} aria-label={`AI-assisted ×${AI_FACTOR} is on. Turn off`}
+            <Tooltip content={`AI-assisted: bills ×${ctxAiF} of the tracked time. Click to turn off.`}>
+              <button type="button" onClick={() => setCtx(c => ({ ...c, ai: false, aiFactor: null }))} aria-label={`AI-assisted ×${ctxAiF} is on. Turn off`}
                 className="group/ai inline-flex h-7 shrink-0 items-center gap-1 rounded-md bg-ai-soft pl-2 pr-1.5 text-xs font-medium text-ai-text outline-none transition-colors hover:bg-ai/15 focus-visible:ring-2 focus-visible:ring-ring/60">
-                <Sparkles className="size-3.5" /> <span className="tnum">AI ×{AI_FACTOR}</span>
+                <Sparkles className="size-3.5" /> <span className="tnum">AI ×{ctxAiF}</span>
                 <X className="size-3 opacity-60 group-hover/ai:opacity-100" />
               </button>
             </Tooltip>
           )}
           <span aria-hidden className="mx-1 h-6 w-px shrink-0 bg-line-strong/80" />
           <ContextChip clients={clientList} activities={activityList} projectsOf={(c) => projectIndex.get(c) || []}
-            client={ctx.client} task={ctx.task} project={ctx.project} ai={ctx.ai}
+            client={ctx.client} task={ctx.task} project={ctx.project} ai={ctx.ai} aiFactor={ctx.aiFactor}
             onChange={(patch) => setCtx(c => ({ ...c, ...patch }))}
             onDone={() => inputRef.current?.focus()} />
         </div>

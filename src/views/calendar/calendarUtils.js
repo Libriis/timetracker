@@ -1,4 +1,5 @@
 // Date math and layout for the Calendar view. Pure functions, local time everywhere.
+import { validAiFactor } from '../../lib/billing.js';
 import { UI_LOCALE } from '../../lib/format.js';
 
 export const MIN_MS = 60000;
@@ -76,12 +77,14 @@ export function resizedDuration(start, end) {
 }
 
 // A copy placed right after the original: same span, same stored tracked time, never invoiced.
+// An AI entry's own factor comes along (it is part of how that work bills).
 export function duplicateOf(e, id) {
   const start = entryEnd(e);
   const span = Math.max(MIN_MS, start - e.start);
   const duration = Number.isFinite(e.duration) ? Math.max(0, e.duration) : span;
   return {
     id, client: e.client, task: e.task, project: e.project || '', note: e.note || '', free: !!e.free, ai: !!e.ai,
+    ...(e.ai && validAiFactor(e.aiFactor) != null ? { aiFactor: validAiFactor(e.aiFactor) } : {}),
     start, end: start + span, duration,
   };
 }

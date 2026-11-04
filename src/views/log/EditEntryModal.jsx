@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { AlertTriangle, Check, Gift, Info, Pencil, RotateCcw, Sparkles } from 'lucide-react';
-import { AI_FACTOR } from '../../lib/billing.js';
+import { AI_FACTOR, validAiFactor, withAiFactor } from '../../lib/billing.js';
 import { formatHM, formatTime, UI_LOCALE } from '../../lib/format.js';
+import { AiFactorField } from '../../components/ui/AiFactorPicker.jsx';
 import { Button } from '../../components/ui/Button.jsx';
 import { DurationSlider } from '../../components/ui/DurationSlider.jsx';
 import { SwitchRow } from '../../components/ui/Switch.jsx';
@@ -34,6 +35,8 @@ export function EditEntryModal({ entry, clients, tasks, onClose, onSave }) {
   const [note, setNote] = useState(entry.note || '');
   const [free, setFree] = useState(!!entry.free);
   const [ai, setAi] = useState(!!entry.ai);
+  const [aiFactor, setAiFactor] = useState(validAiFactor(entry.aiFactor)); // own factor, null = Default (follow Settings)
+  const aiF = aiFactor ?? AI_FACTOR;
   const startInit = toInput(entry.start);
   const endInit = toInput(entry.end);
   const [start, setStart] = useState(startInit);
@@ -137,7 +140,8 @@ export function EditEntryModal({ entry, clients, tasks, onClose, onSave }) {
     if (!rangeUntouched && isFuture(e)) { setError('End is in the future. Set it to now or earlier.'); return; }
     if (long && !longConfirmed) { setLongOkKey(rangeKey); return; }
     const duration = rangeUntouched ? entry.duration : e - s;
-    onSave({ ...entry, client, task, project, note, free, ai, start: s, end: e, duration });
+    // Default or AI off: the entry has no own factor (the key goes away).
+    onSave(withAiFactor({ ...entry, client, task, project, note, free, ai, start: s, end: e, duration }, aiFactor));
   };
 
   const notice = shifted ? (
@@ -232,8 +236,13 @@ export function EditEntryModal({ entry, clients, tasks, onClose, onSave }) {
           <SwitchRow tone="free" icon={<Gift />} checked={free} onChange={setFree}
             label="Free of charge" description={free ? 'Goodwill, billed at €0' : 'Bill this at €0'} />
           <SwitchRow tone="ai" icon={<Sparkles />} checked={ai} onChange={setAi}
-            label={`AI-assisted ×${AI_FACTOR}`} description={`Bills ×${AI_FACTOR} the time`} />
+            label={`AI-assisted ×${aiF}`} description={`Bills ×${aiF} the time`} />
         </div>
+        {/* AI on: this entry's factor. Default follows Settings; a number stays with the entry. */}
+        {ai && (
+          <AiFactorField value={aiFactor} onChange={setAiFactor}
+            className="rounded-xl border border-ai/30 bg-ai-soft/40 px-3 py-2.5" />
+        )}
       </div>
       {error && <div role="alert" className="mt-3 rounded-lg border border-danger/30 bg-danger-soft px-3 py-2 text-sm text-danger-text">{error}</div>}
     </Modal>

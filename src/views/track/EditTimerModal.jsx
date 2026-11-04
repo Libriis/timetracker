@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Check, Pencil } from 'lucide-react';
-import { timerElapsed } from '../../lib/billing.js';
+import { timerElapsed, validAiFactor } from '../../lib/billing.js';
 import { formatClock, formatTime } from '../../lib/format.js';
 import { AiToggle } from '../../components/ui/AiToggle.jsx';
 import { Button } from '../../components/ui/Button.jsx';
@@ -21,6 +21,7 @@ export function EditTimerModal({ timer, timers = [], clients, tasks, projectInde
   const [task, setTask] = useState(timer.task);
   const [project, setProject] = useState(timer.project || '');
   const [ai, setAi] = useState(!!timer.ai);
+  const [aiFactor, setAiFactor] = useState(validAiFactor(timer.aiFactor)); // own factor, null = Default
   const [start, setStart] = useState(toInput(timer.startedAt));
   const [error, setError] = useState('');
 
@@ -49,7 +50,8 @@ export function EditTimerModal({ timer, timers = [], clients, tasks, projectInde
   };
 
   const save = () => {
-    const patch = { note: note.trim(), client, task, project, ai };
+    // aiFactor undefined = Default (App drops the key); AI off drops it too.
+    const patch = { note: note.trim(), client, task, project, ai, aiFactor: ai ? (aiFactor ?? undefined) : undefined };
     if (startChanged) {
       if (!Number.isFinite(startMs)) { setError('Enter a valid start time.'); return; }
       if (picked > now) { setError('The start time is in the future.'); return; }
@@ -95,7 +97,7 @@ export function EditTimerModal({ timer, timers = [], clients, tasks, projectInde
             <Input type="datetime-local" value={start} max={toInput(now)} onChange={(e) => { setStart(e.target.value); setError(''); }} />
           </Field>
         </div>
-        <AiToggle ai={ai} setAi={setAi} />
+        <AiToggle ai={ai} setAi={setAi} factor={aiFactor} setFactor={setAiFactor} noun="timer" />
         {twin && (
           <p className="rounded-lg border border-warning/30 bg-warning-soft px-3 py-2 text-sm text-warning-text">
             Another timer already tracks this exact work ({twin.runningSince ? 'running' : 'paused'}). If you save, both timers bill.

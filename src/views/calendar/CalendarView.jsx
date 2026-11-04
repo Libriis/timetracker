@@ -255,7 +255,7 @@ export function CalendarView({
         key: e.id || `e-${e.start}-${i}`, kind: 'entry', entry: e,
         start: e.start, rawEnd, end: Math.max(rawEnd, e.start + MIN_MS),
         client: e.client, task: e.task, project: e.project, note: e.note,
-        ai: !!e.ai, free: !!e.free, invoiced: !!e.invoiced, duration: e.duration || 0,
+        ai: !!e.ai, aiFactor: e.aiFactor, free: !!e.free, invoiced: !!e.invoiced, duration: e.duration || 0, // aiFactor: labels show the entry's own factor
         ...billing(e),
       };
     }), [entries, from, to, billing]);
@@ -273,7 +273,7 @@ export function CalendarView({
         return {
           key: 'timer-' + t.id, kind: isRunning ? 'running' : 'paused', timer: t,
           start: t.startedAt, rawEnd, end: Math.max(rawEnd, t.startedAt + MIN_MS),
-          client: t.client, task: t.task, project: t.project, note: t.note, ai: !!t.ai,
+          client: t.client, task: t.task, project: t.project, note: t.note, ai: !!t.ai, aiFactor: t.aiFactor,
           elapsed: (n) => timerElapsed(t, n), live: at,
         };
       });

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence } from 'motion/react';
 import { toast } from 'sonner';
 import { Download, ListChecks, Plus, Search, SearchX, X } from 'lucide-react';
-import { timerElapsed } from '../../lib/billing.js';
+import { AI_FACTOR, timerElapsed, validAiFactor } from '../../lib/billing.js';
 import { formatClock, formatEUR, UI_LOCALE } from '../../lib/format.js';
 import { DateRangePicker, formatRange, rangeOf } from '../../components/ui/DateRangePicker.jsx';
 import { Page, PageHeader } from '../../components/shell/PageHeader.jsx';
@@ -337,6 +337,15 @@ export function Log({
 
   const bulkMs = selected.reduce((s, e) => s + e.duration, 0);
   const bulkNet = clientMoney(selected, cfg).net;
+  // Bulk AI factor: only the selected AI entries change. Their own factor when they all share one
+  // (null = all on Default), undefined when they differ.
+  const selectedAi = selected.filter(e => e.ai);
+  const aiOwn = selectedAi.map(e => validAiFactor(e.aiFactor));
+  const aiCurrent = aiOwn.length && aiOwn.every(f => f === aiOwn[0]) ? aiOwn[0] : undefined;
+  const setAiFactorBulk = (f) => {
+    onBulkUpdate(selectedAi, { aiFactor: f ?? undefined }); // undefined = Default: App drops the key
+    notify(`${plural(selectedAi.length, 'AI entry bills', 'AI entries bill')} at ${f != null ? `×${f}` : `the default ×${AI_FACTOR}`} now.`, 'ok');
+  };
 
   const markList = confirmMark ? filtered.filter(e => !!e.invoiced !== confirmMark.value) : [];
 
@@ -450,6 +459,7 @@ export function Log({
               onInvoiced={(value) => applyInvoiced(selected, value)}
               onSetClient={onBulkUpdate ? (c) => { onBulkUpdate(selected, { client: c }); notify(`Moved ${plural(selected.length, 'entry', 'entries')} to ${c}.`, 'ok'); } : null}
               onSetActivity={onBulkUpdate ? (t) => { onBulkUpdate(selected, { task: t }); notify(`Changed ${plural(selected.length, 'entry', 'entries')} to ${t}.`, 'ok'); } : null}
+              aiCount={selectedAi.length} aiCurrent={aiCurrent} onSetAiFactor={onBulkUpdate ? setAiFactorBulk : null}
               onDelete={onBulkDelete ? () => setConfirmDelete(selected) : null}
               onClear={clearSelection} />
           )}

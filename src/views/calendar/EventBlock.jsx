@@ -2,7 +2,7 @@ import { forwardRef, memo, useEffect, useState } from 'react';
 import * as ContextMenu from '@radix-ui/react-context-menu';
 import * as HoverCard from '@radix-ui/react-hover-card';
 import { CopyPlus, ExternalLink, Gift, Lock, Pause, Pencil, Play, Sparkles, Square, Trash2 } from 'lucide-react';
-import { AI_FACTOR } from '../../lib/billing.js';
+import { entryAiFactor } from '../../lib/billing.js';
 import { cn } from '../../lib/cn.js';
 import { clientColor } from '../../lib/colors.js';
 import { formatClock, formatEUR, formatHM } from '../../lib/format.js';
@@ -44,7 +44,7 @@ function Badges({ it, iconOnly = false }) {
   return (
     <>
       {it.ai && (
-        <span title={`AI-assisted, bills ×${AI_FACTOR}`} className="inline-flex h-4 shrink-0 items-center gap-0.5 rounded bg-ai-soft px-1 text-[10px] font-semibold leading-none text-ai-text">
+        <span title={`AI-assisted, bills ×${entryAiFactor(it)}`} className="inline-flex h-4 shrink-0 items-center gap-0.5 rounded bg-ai-soft px-1 text-[10px] font-semibold leading-none text-ai-text">
           <Sparkles className="size-2.5" />{!iconOnly && 'AI'}
         </span>
       )}
@@ -335,7 +335,7 @@ function Details({ it, now }) {
   const timer = kind !== 'entry';
   const nums = numbersOf(it, now);
   const pauses = kind === 'entry' ? (it.rawEnd - it.start) - it.duration : 0;
-  const why = [it.ai && `AI ×${AI_FACTOR}`, nums.roundMin > 0 && `${nums.roundMin} min rounding`].filter(Boolean).join(', ');
+  const why = [it.ai && `AI ×${entryAiFactor(it)}`, nums.roundMin > 0 && `${nums.roundMin} min rounding`].filter(Boolean).join(', ');
   const billableDiffers = Math.abs(nums.billableMs - nums.ms) >= MIN_MS;
   return (
     <div className="w-72 p-3.5">
@@ -364,7 +364,7 @@ function Details({ it, now }) {
       {(it.ai || it.free || it.invoiced || kind === 'paused') && (
         <div className="mt-2.5 flex flex-wrap gap-1">
           {kind === 'paused' && <span className="inline-flex h-5 items-center gap-1 rounded-md bg-warning-soft px-1.5 text-2xs font-medium text-warning-text"><Pause className="size-3 fill-current" strokeWidth={0} />Paused</span>}
-          {it.ai && <span className="inline-flex h-5 items-center gap-1 rounded-md bg-ai-soft px-1.5 text-2xs font-medium text-ai-text"><Sparkles className="size-3" />AI ×{AI_FACTOR}</span>}
+          {it.ai && <span className="inline-flex h-5 items-center gap-1 rounded-md bg-ai-soft px-1.5 text-2xs font-medium text-ai-text"><Sparkles className="size-3" />AI ×{entryAiFactor(it)}</span>}
           {it.free && <span className="inline-flex h-5 items-center gap-1 rounded-md bg-free-soft px-1.5 text-2xs font-medium text-free-text"><Gift className="size-3" />Free</span>}
           {it.invoiced && <span className="inline-flex h-5 items-center gap-1 rounded-md bg-invoiced-soft px-1.5 text-2xs font-medium text-invoiced-text"><Lock className="size-3" />Invoiced</span>}
         </div>

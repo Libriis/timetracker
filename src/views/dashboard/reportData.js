@@ -1,6 +1,6 @@
 // Pure aggregation for the Dashboard and Insights. Every money and time figure comes from
 // src/lib/billing.js, summed per entry exactly like App.jsx does, so the numbers always match.
-import { billableDuration, billingTotals, calcEarnings, calcStandardValue, getRounding, round2, vatOf as vatAmount } from '../../lib/billing.js';
+import { billableDuration, billingTotals, calcEarnings, calcStandardValue, entryAiFactor, getRounding, round2, vatOf as vatAmount } from '../../lib/billing.js';
 import { CLIENT_PALETTE, clientColor } from '../../lib/colors.js';
 import { formatMonthShort, isoDay, UI_LOCALE } from '../../lib/format.js';
 
@@ -212,7 +212,7 @@ export function buildTree(entries, groupBy, cfg, vatOf) {
   const clientNet = new Map();
   const blank = (id, lvl, e, depth) => ({
     id, depth, kind: lvl.kind, label: lvl.label(e), client: e.client, project: e.project || '',
-    ms: 0, billableMs: 0, net: 0, freeCount: 0, freeValue: 0, aiCount: 0, count: 0,
+    ms: 0, billableMs: 0, net: 0, freeCount: 0, freeValue: 0, aiCount: 0, aiFactor: null, count: 0, // aiFactor: shared by its AI entries, null when they differ
     clients: new Set(), children: new Map(),
   });
   for (const e of entries) {
@@ -227,7 +227,11 @@ export function buildTree(entries, groupBy, cfg, vatOf) {
       if (!n) { n = blank(path, lvl, e, depth); parent.children.set(k, n); }
       n.ms += e.duration; n.billableMs += m.billableMs; n.net += m.net; n.count += 1;
       if (e.free) { n.freeCount += 1; n.freeValue += m.freeValue; }
-      if (e.ai) n.aiCount += 1;
+      if (e.ai) {
+        const f = entryAiFactor(e);
+        n.aiFactor = n.aiCount === 0 || n.aiFactor === f ? f : null;
+        n.aiCount += 1;
+      }
       n.clients.add(e.client);
       parent = n;
     });

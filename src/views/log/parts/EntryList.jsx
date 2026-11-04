@@ -1,6 +1,6 @@
 import { memo, useEffect, useRef } from 'react';
 import { Check, CheckCheck, MoreHorizontal, Pencil, Play, Sparkles, SquareCheck, StickyNote, Trash2, Undo2 } from 'lucide-react';
-import { AI_FACTOR } from '../../../lib/billing.js';
+import { entryAiFactor } from '../../../lib/billing.js';
 import { cn } from '../../../lib/cn.js';
 import { formatClock, formatEUR, formatTime } from '../../../lib/format.js';
 import { Badge, ClientDot } from '../../../components/ui/Badge.jsx';
@@ -88,7 +88,7 @@ export const EntryRow = memo(function EntryRow({
         <div className="flex min-w-0 items-center gap-2">
           <NoteCell entry={e} editing={editingNote} canEdit={canEditNote}
             onStart={() => onStartNote(e.id)} onCommit={(v) => onCommitNote(e, v)} onCancel={onCancelNote} />
-          {e.ai && <Badge variant="ai" title={`AI-assisted, billed at ×${AI_FACTOR}`}><Sparkles />AI ×{AI_FACTOR}</Badge>}
+          {e.ai && <Badge variant="ai" title={`AI-assisted, billed at ×${entryAiFactor(e)}${e.aiFactor != null ? ' (its own factor)' : ''}`}><Sparkles />AI ×{entryAiFactor(e)}</Badge>}
           {e.free && <Badge variant="free">Free</Badge>}
           {e.invoiced && <Badge variant="invoiced"><Check strokeWidth={2.5} />Invoiced</Badge>}
         </div>
@@ -113,7 +113,7 @@ export const EntryRow = memo(function EntryRow({
       <div className={cn('text-right tnum', COL.duration)}>
         <div className="text-base font-semibold text-fg">{formatClock(e.duration)}</div>
         {showBillable && (
-          <Tooltip content={e.ai ? `Billed as ${formatClock(f.billableMs)}: AI ×${AI_FACTOR}, then rounded` : `Billed as ${formatClock(f.billableMs)} after rounding`}>
+          <Tooltip content={e.ai ? `Billed as ${formatClock(f.billableMs)}: AI ×${entryAiFactor(e)}, then rounded` : `Billed as ${formatClock(f.billableMs)} after rounding`}>
             <div className="mt-0.5 whitespace-nowrap text-2xs text-fg-subtle">{formatClock(f.billableMs)} billable</div>
           </Tooltip>
         )}

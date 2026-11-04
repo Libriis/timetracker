@@ -1,5 +1,6 @@
 import { useId, useMemo, useRef, useState } from 'react';
 import { Check, Plus } from 'lucide-react';
+import { withAiFactor } from '../../lib/billing.js';
 import { AiToggle } from '../../components/ui/AiToggle.jsx';
 import { Button } from '../../components/ui/Button.jsx';
 import { buildProjectIndex } from './trackData.js';
@@ -30,6 +31,7 @@ export function ManualEntryModal({ clients, tasks, entries, onClose, onSave }) {
   const [note, setNote] = useState('');
   const [free, setFree] = useState(false);
   const [ai, setAi] = useState(false);
+  const [aiFactor, setAiFactor] = useState(null); // the entry's own AI factor, null = Default (follow Settings)
   const [mode, setMode] = useState('duration');
   const [start, setStart] = useState(toInput(new Date(now.getTime() - 3600000)));
   const [end, setEnd] = useState(toInput(now));
@@ -46,7 +48,7 @@ export function ManualEntryModal({ clients, tasks, entries, onClose, onSave }) {
   const saved = useRef(false);
   const save = () => {
     if (saved.current) return;
-    const fields = { client, task, project: project.trim(), note: note.trim(), free, ai };
+    const fields = withAiFactor({ client, task, project: project.trim(), note: note.trim(), free, ai }, aiFactor);
     if (mode === 'range') {
       const s = new Date(start).getTime();
       const e = new Date(end).getTime();
@@ -90,7 +92,7 @@ export function ManualEntryModal({ clients, tasks, entries, onClose, onSave }) {
         </div>
         <div className="grid gap-2">
           <FreeToggle free={free} setFree={setFree} />
-          <AiToggle ai={ai} setAi={setAi} />
+          <AiToggle ai={ai} setAi={setAi} factor={aiFactor} setFactor={setAiFactor} />
         </div>
         <div className="rounded-xl border border-line bg-surface-2/60 p-4">
           <div className="mb-4 flex flex-wrap items-center justify-between gap-2">

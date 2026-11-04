@@ -1,5 +1,5 @@
 import { CheckCheck, Gift, Info, ReceiptText, Undo2 } from 'lucide-react';
-import { AI_FACTOR } from '../../../lib/billing.js';
+import { aiLabel } from '../../../components/ui/AiFactorPicker.jsx';
 import { cn } from '../../../lib/cn.js';
 import { formatEUR } from '../../../lib/format.js';
 import { Amount, Trend } from '../../../components/ui/Stat.jsx';
@@ -41,16 +41,17 @@ function Kpi({ label, value, unit, sub, subTip, trend, hero = false, className }
 }
 
 // "+52:17 h incl. AI ×1.5": why billable time differs from tracked time, in a few words.
+// The factor shows when every billed AI entry shares it (t.aiFactor), else just "AI".
 function billableNote(t) {
   const diff = t.billableMs - t.ms;
   if (Math.abs(diff) < MIN) return 'Same as tracked';
   const h = `${diff > 0 ? '+' : '−'}${hm(Math.abs(diff))}`;
-  if (diff > 0) return t.aiExtraMs >= MIN ? `${h} incl. AI ×${AI_FACTOR}` : `${h} from rounding`;
+  if (diff > 0) return t.aiExtraMs >= MIN ? `${h} incl. ${aiLabel(t.aiFactor)}` : `${h} from rounding`;
   return t.freeMs >= MIN ? `${h}, free work` : `${h} vs tracked`;
 }
 function billableTip(t) {
   const parts = [];
-  if (t.aiExtraMs >= MIN) parts.push(`AI ×${AI_FACTOR} adds ${hm(t.aiExtraMs)}.`);
+  if (t.aiExtraMs >= MIN) parts.push(`${aiLabel(t.aiFactor)} adds ${hm(t.aiExtraMs)}.`);
   if (t.roundingMs >= MIN) parts.push(`Rounding adds ${hm(t.roundingMs)}.`);
   if (t.freeMs >= MIN) parts.push(`Free work (${hm(t.freeMs)}) is not billed.`);
   return parts.length ? `Billable = tracked ${hm(t.ms)}. ${parts.join(' ')}` : null;

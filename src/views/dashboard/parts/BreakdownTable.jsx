@@ -1,5 +1,4 @@
 import { useMemo, useState } from 'react';
-import { AI_FACTOR } from '../../../lib/billing.js';
 import { flexRender, getCoreRowModel, getExpandedRowModel, getSortedRowModel, useReactTable } from '@tanstack/react-table';
 import { ArrowDown, ArrowUp, ChevronRight, Gift, Sparkles } from 'lucide-react';
 import { cn } from '../../../lib/cn.js';
@@ -75,7 +74,7 @@ export function BreakdownTable({ rows, total, groupBy, roundingOf, vatBadgeOf, i
             </Tooltip>
           ),
           r.aiCount > 0 && depth === 0 && (
-            <Tooltip key="a" content={`${r.aiCount} AI-assisted ${r.aiCount === 1 ? 'session' : 'sessions'}, billed at ×${AI_FACTOR}`}>
+            <Tooltip key="a" content={`${r.aiCount} AI-assisted ${r.aiCount === 1 ? 'session' : 'sessions'}, ${r.aiFactor != null ? `billed at ×${r.aiFactor}` : 'billed at different AI factors'}`}>
               <span className="inline-flex shrink-0" aria-label={`${r.aiCount} AI-assisted`}><Badge variant="ai"><Sparkles />{r.aiCount}{compact ? '' : ' AI'}</Badge></span>
             </Tooltip>
           ),

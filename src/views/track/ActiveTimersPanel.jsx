@@ -7,7 +7,7 @@ import { ActiveTimerRow } from './ActiveTimerRow.jsx';
 // flashId / flashN: ring one card for a moment (a start found its work already on that timer).
 // Each card reports whether its work line and clock fit on one line (see ActiveTimerRow). If one does not,
 // every card uses two lines, so the clocks and buttons stay lined up.
-export function ActiveTimersPanel({ timers, billing, primaryId, flashId, flashN, onPause, onResume, onStop, onToggleAi, onFocus, onEdit }) {
+export function ActiveTimersPanel({ timers, billing, primaryId, flashId, flashN, onPause, onResume, onStop, onToggleAi, onFocus, onEdit, onSetAiFactor }) {
   const anyRunning = timers.some(t => t.runningSince);
   const now = useNow(anyRunning);
   const [tight, setTight] = useState({});
@@ -21,7 +21,7 @@ export function ActiveTimersPanel({ timers, billing, primaryId, flashId, flashN,
             transition={{ type: 'spring', stiffness: 500, damping: 40 }}>
             <ActiveTimerRow timer={t} now={now} billing={billing} narrow={narrow} onFit={onFit} primary={t.id === primaryId && timers.length > 0}
               flash={t.id === flashId ? flashN : 0}
-              onPause={onPause} onResume={onResume} onStop={onStop} onToggleAi={onToggleAi} onFocus={onFocus} onEdit={onEdit} />
+              onPause={onPause} onResume={onResume} onStop={onStop} onToggleAi={onToggleAi} onFocus={onFocus} onEdit={onEdit} onSetAiFactor={onSetAiFactor} />
           </motion.div>
         ))}
       </AnimatePresence>

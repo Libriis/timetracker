@@ -1,9 +1,10 @@
 import { forwardRef, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Command } from 'cmdk';
 import { Check, ChevronDown, ChevronLeft, Pause, Play, Plus, Search, Sparkles, Square, X } from 'lucide-react';
-import { AI_FACTOR, timerElapsed } from '../../lib/billing.js';
+import { AI_FACTOR, entryAiFactor, timerElapsed, validAiFactor } from '../../lib/billing.js';
 import { cn } from '../../lib/cn.js';
 import { formatClock, formatEUR } from '../../lib/format.js';
+import { AiFactorPicker } from '../../components/ui/AiFactorPicker.jsx';
 import { ClientDot } from '../../components/ui/Badge.jsx';
 import { Kbd } from '../../components/ui/Kbd.jsx';
 import { Popover, PopoverContent, PopoverTrigger } from '../../components/ui/Popover.jsx';
@@ -46,7 +47,9 @@ function fitBar(rowW, nOthers) {
 }
 
 // One chip for client, activity and project: [● Client · Activity ▾]. Three short steps in one popover.
-function ContextChip({ clients, activities, projectsOf, client, task, project, ai, onChange, onDone, compact }) {
+// The AI switch sits at the bottom; with AI on, the next timer's factor (aiFactor, null = Default) too.
+function ContextChip({ clients, activities, projectsOf, client, task, project, ai, aiFactor, onChange, onDone, compact }) {
+  const aiF = validAiFactor(aiFactor) ?? AI_FACTOR;
   const [open, setOpen] = useState(false);
   const [step, setStep] = useState('client');
   const [query, setQuery] = useState('');
@@ -129,11 +132,17 @@ function ContextChip({ clients, activities, projectsOf, client, task, project, a
             )}
           </Command.List>
         </Command>
-        <label className="flex cursor-pointer items-center gap-2 border-t border-line px-3 py-2.5 text-sm text-fg">
-          <Sparkles className={cn('size-3.5', ai ? 'text-ai-text' : 'text-fg-subtle')} aria-hidden />
-          <span className="min-w-0 flex-1">AI-assisted, bill ×{AI_FACTOR}</span>
-          <Switch size="sm" tone="ai" checked={!!ai} onCheckedChange={(v) => onChange({ ai: !!v })} aria-label={`AI-assisted, bill ×${AI_FACTOR}`} />
-        </label>
+        <div className="border-t border-line">
+          <label className="flex cursor-pointer items-center gap-2 px-3 py-2.5 text-sm text-fg">
+            <Sparkles className={cn('size-3.5', ai ? 'text-ai-text' : 'text-fg-subtle')} aria-hidden />
+            <span className="min-w-0 flex-1">AI-assisted, bill ×{aiF}</span>
+            {/* AI off also drops the picked factor. */}
+            <Switch size="sm" tone="ai" checked={!!ai} onCheckedChange={(v) => onChange(v ? { ai: true } : { ai: false, aiFactor: null })} aria-label={`AI-assisted, bill ×${aiF}`} />
+          </label>
+          {ai && (
+            <AiFactorPicker value={aiFactor} onChange={(f) => onChange({ aiFactor: f })} label="AI factor for the next timer" className="-mt-1 px-3 pb-3" />
+          )}
+        </div>
       </PopoverContent>
     </Popover>
   );
@@ -148,6 +157,7 @@ function useComposer(entries, clients, tasks) {
     task: latest && tasks.includes(latest.task) ? latest.task : tasks[0] || '',
     project: '',
     ai: false,
+    aiFactor: null, // the next timer's own AI factor, null = Default (follow Settings)
   }));
   const projectIndex = useMemo(() => {
     const m = new Map();
@@ -164,12 +174,13 @@ function useComposer(entries, clients, tasks) {
   return { note, setNote, ctx, setCtx, projectIndex, clientList, activityList, canStart: !!(ctx.client && ctx.task) };
 }
 
-function AiTag({ onOff }) {
+function AiTag({ onOff, factor }) {
+  const f = validAiFactor(factor) ?? AI_FACTOR;
   return (
-    <Tooltip content={`AI-assisted: bills ×${AI_FACTOR} of the tracked time. Click to turn off.`}>
-      <button type="button" onClick={onOff} aria-label={`AI-assisted ×${AI_FACTOR} is on. Turn off`}
+    <Tooltip content={`AI-assisted: bills ×${f} of the tracked time. Click to turn off.`}>
+      <button type="button" onClick={onOff} aria-label={`AI-assisted ×${f} is on. Turn off`}
         className="group/ai inline-flex h-7 shrink-0 items-center gap-1 rounded-md bg-ai-soft pl-2 pr-1.5 text-xs font-medium text-ai-text outline-none transition-colors hover:bg-ai/15 focus-visible:ring-2 focus-visible:ring-ring/60">
-        <Sparkles className="size-3.5" /> <span className="tnum">AI ×{AI_FACTOR}</span>
+        <Sparkles className="size-3.5" /> <span className="tnum">AI ×{f}</span>
         <X className="size-3 opacity-60 group-hover/ai:opacity-100" />
       </button>
     </Tooltip>
@@ -205,10 +216,10 @@ const ComposerField = forwardRef(function ComposerField({ c, onSubmit, compact, 
       {typed && !compact && (
         <span aria-hidden className="mr-1 hidden shrink-0 items-center gap-1.5 text-xs text-fg-subtle lg:flex"><Kbd>Enter</Kbd> to start</span>
       )}
-      {c.ctx.ai && <AiTag onOff={() => c.setCtx(x => ({ ...x, ai: false }))} />}
+      {c.ctx.ai && <AiTag factor={c.ctx.aiFactor} onOff={() => c.setCtx(x => ({ ...x, ai: false, aiFactor: null }))} />}
       <span aria-hidden className="mx-1 h-6 w-px shrink-0 bg-line-strong/80" />
       <ContextChip clients={c.clientList} activities={c.activityList} projectsOf={(cl) => c.projectIndex.get(cl) || []}
-        client={c.ctx.client} task={c.ctx.task} project={c.ctx.project} ai={c.ctx.ai} compact={compact}
+        client={c.ctx.client} task={c.ctx.task} project={c.ctx.project} ai={c.ctx.ai} aiFactor={c.ctx.aiFactor} compact={compact}
         onChange={(patch) => c.setCtx(x => ({ ...x, ...patch }))}
         onDone={() => inputRef.current?.focus()} />
     </div>
@@ -246,7 +257,7 @@ function RunningCard({ t, now, amountOf, narrow, tight, onPause, onStop, onOpen 
         className="-my-1 flex min-w-0 flex-1 flex-col rounded-md py-1 text-left leading-tight outline-none focus-visible:ring-2 focus-visible:ring-ring/60">
         <span className="flex min-w-0 items-center gap-2">
           <span className="truncate text-sm font-semibold text-fg">{title}</span>
-          {t.ai && <span className="inline-flex h-[18px] shrink-0 items-center gap-0.5 rounded bg-ai-soft px-1 text-2xs font-semibold text-ai-text"><Sparkles className="size-3" />AI ×{AI_FACTOR}</span>}
+          {t.ai && <span className="inline-flex h-[18px] shrink-0 items-center gap-0.5 rounded bg-ai-soft px-1 text-2xs font-semibold text-ai-text"><Sparkles className="size-3" />AI ×{entryAiFactor(t)}</span>}
         </span>
         {/* The client keeps its name (up to the full line); project and activity give way first. */}
         <span className="mt-0.5 flex min-w-0 items-center gap-1.5 overflow-hidden text-xs text-fg-muted">
@@ -297,7 +308,7 @@ function TimerChip({ t, now, size = 'full', onPause, onResume, onStop }) {
       <span className={cn('flex min-w-0 flex-col leading-tight', row ? 'flex-1' : size === 'compact' ? 'max-w-[6.5rem]' : 'max-w-[9rem]')}>
         <span className="flex min-w-0 items-center gap-1">
           <span className="truncate text-sm font-medium text-fg">{title}</span>
-          {t.ai && <Sparkles aria-label={`AI-assisted ×${AI_FACTOR}`} className="size-3 shrink-0 text-ai-text" />}
+          {t.ai && <Sparkles aria-label={`AI-assisted ×${entryAiFactor(t)}`} className="size-3 shrink-0 text-ai-text" />}
         </span>
         <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-fg-subtle">
           <ClientDot client={t.client} size={7} /><span className="truncate">{t.client}</span>
@@ -374,9 +385,9 @@ export const TimerBar = forwardRef(function TimerBar({
 
   const start = (viaKeyboard) => {
     if (!c.canStart || !onStart) return;
-    onStart({ client: c.ctx.client, task: c.ctx.task, project: c.ctx.project, note: c.note.trim(), ai: !!c.ctx.ai });
+    onStart({ client: c.ctx.client, task: c.ctx.task, project: c.ctx.project, note: c.note.trim(), ai: !!c.ctx.ai, aiFactor: c.ctx.ai ? c.ctx.aiFactor : null }, { applyAi: true });
     c.setNote('');
-    c.setCtx(x => ({ ...x, ai: false }));
+    c.setCtx(x => ({ ...x, ai: false, aiFactor: null }));
     setAnotherOpen(false);
     if (viaKeyboard) fieldRef.current?.blur();
   };

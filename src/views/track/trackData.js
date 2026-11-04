@@ -95,7 +95,7 @@ export function timerMoney(t, now, billing) {
   // The shared clock ticks once a second, so right after a resume `now` can be a little older than
   // runningSince. Never count that as negative time (the clock would step back a second).
   const duration = timerElapsed(t, t.runningSince ? Math.max(now, t.runningSince) : now);
-  const amount = calcEarnings({ client: t.client, task: t.task, duration, ai: !!t.ai }, rates, clientRates, rounding, clientRounding);
+  const amount = calcEarnings({ client: t.client, task: t.task, duration, ai: !!t.ai, aiFactor: t.aiFactor }, rates, clientRates, rounding, clientRounding);
   return { amount, rate: getRate(t.client, t.task, rates, clientRates), duration };
 }
 

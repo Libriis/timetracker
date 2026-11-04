@@ -1,11 +1,12 @@
 import { useEffect, useLayoutEffect, useRef } from 'react';
 import { useReducedMotion } from 'motion/react';
 import { Maximize2, MoreHorizontal, Pause, Pencil, Play, Sparkles, Square } from 'lucide-react';
-import { AI_FACTOR, aiAdjusted } from '../../lib/billing.js';
+import { aiAdjusted, entryAiFactor } from '../../lib/billing.js';
 import { cn } from '../../lib/cn.js';
 import { clientColor } from '../../lib/colors.js';
 import { LONG_TIMER_WARN_MS } from '../../lib/constants.js';
 import { formatClock, formatEUR, formatHours, formatTime } from '../../lib/format.js';
+import { AiFactorPicker } from '../../components/ui/AiFactorPicker.jsx';
 import { Badge, ClientDot } from '../../components/ui/Badge.jsx';
 import { Button } from '../../components/ui/Button.jsx';
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '../../components/ui/DropdownMenu.jsx';
@@ -32,11 +33,13 @@ const once = (fn) => (ev) => { if (ev.detail > 1) return; fn(); };
 // `narrow`: the clock and buttons sit on a second line. Each card reports through onFit whether its work
 // line (client · project · activity) and its clock fit on one line; the panel stacks every card when one
 // does not, so client and project stay whole and the clocks stay in one column.
-export function ActiveTimerRow({ timer, now, billing, primary, narrow = false, onFit, flash = 0, onPause, onResume, onStop, onToggleAi, onFocus, onEdit }) {
+// `onSetAiFactor(id, factor|null)`: the timer's own AI factor (null = Default); the picker sits in ⋯ under the AI switch.
+export function ActiveTimerRow({ timer, now, billing, primary, narrow = false, onFit, flash = 0, onPause, onResume, onStop, onToggleAi, onFocus, onEdit, onSetAiFactor }) {
   const running = !!timer.runningSince;
   const { amount, rate, duration: elapsed } = timerMoney(timer, now, billing);
   const longWarn = running && elapsed >= LONG_TIMER_WARN_MS;
-  const billable = aiAdjusted(elapsed, timer.ai);
+  const aiF = entryAiFactor(timer); // this timer's own factor, else the setting
+  const billable = aiAdjusted(elapsed, timer.ai, aiF);
   const color = clientColor(timer.client);
   const title = workTitle(timer);
   const cardRef = useRef(null);
@@ -68,7 +71,7 @@ export function ActiveTimerRow({ timer, now, billing, primary, narrow = false, o
     const room = card.clientWidth - 32 - 20 - 8 - side;
     onFit?.(timer.id, narrowRef.current ? need > room - 12 : need > room);
   };
-  useLayoutEffect(() => { fit.current(); }, [title, timer.client, timer.project, timer.task, timer.ai, running, longWarn]);
+  useLayoutEffect(() => { fit.current(); }, [title, timer.client, timer.project, timer.task, timer.ai, aiF, running, longWarn]);
   useLayoutEffect(() => {
     const card = cardRef.current;
     let alive = true;
@@ -99,7 +102,7 @@ export function ActiveTimerRow({ timer, now, billing, primary, narrow = false, o
         <div ref={titleRef} className="flex min-w-0 items-center gap-2">
           <span className={cn('truncate', running ? 'text-md font-semibold text-fg' : 'text-base font-medium text-fg-muted')}>{title}</span>
           {!running && <Badge variant="paused"><Pause fill="currentColor" strokeWidth={0} />Paused</Badge>}
-          {timer.ai && <Badge variant="ai" title={`AI-assisted, bills ×${AI_FACTOR}`}><Sparkles />AI ×{AI_FACTOR}</Badge>}
+          {timer.ai && <Badge variant="ai" title={`AI-assisted, bills ×${aiF}`}><Sparkles />AI ×{aiF}</Badge>}
           <Pencil aria-hidden className="size-3.5 shrink-0 text-fg-subtle opacity-0 transition-opacity group-hover/edit:opacity-100" />
         </div>
         <div ref={metaRef} className={cn('mt-1 flex min-w-0 items-center gap-2', running ? 'text-sm' : 'text-xs')}>
@@ -164,9 +167,15 @@ export function ActiveTimerRow({ timer, now, billing, primary, narrow = false, o
             <DropdownMenuContent align="end" className="w-64"
               onCloseAutoFocus={(ev) => { if (released.current) { released.current = false; ev.preventDefault(); } }}>
               <DropdownMenuItem onSelect={() => onEdit?.(timer)}><Pencil /> Edit details and start time</DropdownMenuItem>
-              <DropdownMenuCheckboxItem checked={!!timer.ai} onCheckedChange={release(() => onToggleAi(timer.id))}>
-                AI-assisted, bill ×{AI_FACTOR}
+              {/* Turning AI on keeps the menu open, so the factor picker shows right under the switch. */}
+              <DropdownMenuCheckboxItem checked={!!timer.ai} onCheckedChange={release(() => onToggleAi(timer.id))}
+                onSelect={(ev) => { if (!timer.ai && onSetAiFactor) ev.preventDefault(); }}>
+                AI-assisted, bill ×{aiF}
               </DropdownMenuCheckboxItem>
+              {timer.ai && onSetAiFactor && (
+                <AiFactorPicker menu value={timer.aiFactor} onChange={(f) => onSetAiFactor(timer.id, f)}
+                  label="AI factor for this timer" caption="Factor for this timer" />
+              )}
               <DropdownMenuSeparator />
               {running
                 ? <DropdownMenuItem onSelect={release(() => onPause(timer.id))} shortcut={primary ? 'Space' : undefined}><Pause fill="currentColor" strokeWidth={0} /> Pause</DropdownMenuItem>

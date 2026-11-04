@@ -122,3 +122,24 @@ describe('round 4: money totals follow billingTotals', () => {
     expect(round2(rows.reduce((s, r) => s + r.net, 0))).toBe(billingTotals(list, cfgV).net);
   });
 });
+
+describe('buildTree AI factor per row (for the badge tooltip)', () => {
+  const cfg = { rates: { Edit: 30 }, clientRates: {}, rounding: 0, clientRounding: {} };
+  const e = (id, client, extra) => ({ id, client, task: 'Edit', project: '', note: '', start: d(2026, 10, 2, 9).getTime(), end: d(2026, 10, 2, 10).getTime(), duration: 3600000, ...extra });
+  it('shows the factor the AI entries of a row share, null when they differ', () => {
+    const list = [
+      e('1', 'Same', { ai: true, aiFactor: 2 }), e('2', 'Same', { ai: true, aiFactor: 2 }), e('3', 'Same'),
+      e('4', 'Mixed', { ai: true, aiFactor: 2 }), e('5', 'Mixed', { ai: true }),
+      e('6', 'Plain'),
+    ];
+    const rows = buildTree(list, 'client', cfg, () => 23);
+    const by = Object.fromEntries(rows.map(r => [r.client, r]));
+    expect(by.Same.aiCount).toBe(2);
+    expect(by.Same.aiFactor).toBe(2);
+    expect(by.Mixed.aiCount).toBe(2);
+    expect(by.Mixed.aiFactor).toBe(null);
+    expect(by.Plain.aiCount).toBe(0);
+    // money follows each entry's own factor: 2 h x 2 + 1 h = 5 h at 30
+    expect(by.Same.net).toBe(150);
+  });
+});

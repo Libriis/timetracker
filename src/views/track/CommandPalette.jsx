@@ -67,7 +67,7 @@ export function CommandPalette({ open, onOpenChange, recentWork, timers, primary
   // Enter picks it up again. Running ones stay in history order (Enter on them only opens them).
   const work = useMemo(() => {
     if (!search.trim()) return recentWork.slice(0, 40);
-    const paused = timers.filter(t => !t.runningSince).map(t => ({ id: `timer-${t.id}`, client: t.client, task: t.task, project: t.project || '', note: t.note || '', ai: !!t.ai }));
+    const paused = timers.filter(t => !t.runningSince).map(t => ({ id: `timer-${t.id}`, client: t.client, task: t.task, project: t.project || '', note: t.note || '', ai: !!t.ai, ...(t.aiFactor != null ? { aiFactor: t.aiFactor } : {}) }));
     const keys = new Set(paused.map(workKey));
     return [...paused, ...recentWork.filter(w => !keys.has(workKey(w)))];
   }, [search, recentWork, timers]);

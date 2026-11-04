@@ -4,7 +4,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { check } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { writeDiskBackup } from './lib/backup.js';
-import { round2, getRate, getVat, getRounding, billableDuration, calcEarnings, calcStandardValue, timerElapsed, normalizeTimer, billingTotals, setAiFactor, DEFAULT_AI_FACTOR } from './lib/billing.js';
+import { round2, getRate, getVat, getRounding, billableDuration, calcEarnings, calcStandardValue, timerElapsed, normalizeTimer, billingTotals, setAiFactor, DEFAULT_AI_FACTOR, entryAiFactor, validAiFactor, withAiFactor, tidyAiFactor } from './lib/billing.js';
 import { DEFAULT_CLIENTS, DEFAULT_TASKS, DEFAULT_RATES, DEFAULT_VAT, DEFAULT_CLIENT_RATES, DEFAULT_CLIENT_VAT, DEFAULT_ROUNDING, IDLE_THRESHOLD_S, SCHEMA_VERSION, DEFAULT_CLIENT_ROUNDING, DEFAULT_DESCRIPTIONS, DEFAULT_ISSUER, SEED_ENTRIES } from './lib/constants.js';
 import { formatClock, formatDuration, isoDay } from './lib/format.js';
 import { printReportHTML, buildPDFHTML } from './lib/pdf.js';
@@ -63,6 +63,7 @@ export default function TimeTracker() {
   const [project, setProject] = useState('');
   const [note, setNote] = useState('');
   const [aiAssisted, setAiAssisted] = useState(false);
+  const [aiAssistedFactor, setAiAssistedFactor] = useState(null); // ai-per-entry hook: the next timer's own AI factor (null = follow Settings)
 
   const [view, setView] = useState(initialView);
   const [period, setPeriod] = useState('week');
@@ -248,8 +249,10 @@ export default function TimeTracker() {
   const saveCsvFormat = (n) => saveTo('csvFormat', n, setCsvFormat);
   // Sets the live factor in billing.js first, then stores it; every screen re-renders with it.
   const saveAiFactor = (n) => saveTo('aiFactor', setAiFactor(n), setAiFactorState);
-  const saveEntries = (n) => saveTo('entries', n, setEntries);
-  const saveActiveTimers = (arr) => {
+  // ai-per-entry hook: aiFactor stays only on AI work and only when valid (AI off drops it), on every save path.
+  const saveEntries = (n) => saveTo('entries', n.map(tidyAiFactor), setEntries);
+  const saveActiveTimers = (list) => {
+    const arr = list && list.map(tidyAiFactor);
     setActiveTimers(arr);
     window.storage.delete('tracker:activeTimer').catch(() => {}); // obsolete legacy key — keep it gone
     if (arr && arr.length) window.storage.set('tracker:activeTimers', JSON.stringify(arr)).catch(e => console.error(e));
@@ -261,10 +264,11 @@ export default function TimeTracker() {
   const startTimer = () => {
     if (!passStartGate()) return;
     const ts = Date.now();
-    saveActiveTimers([...activeTimers, { id: newTimerId(), client: selectedClient, task: selectedTask, project, note, ai: aiAssisted, startedAt: ts, runningSince: ts, accumulatedMs: 0 }]);
+    saveActiveTimers([...activeTimers, withAiFactor({ id: newTimerId(), client: selectedClient, task: selectedTask, project, note, ai: aiAssisted, startedAt: ts, runningSince: ts, accumulatedMs: 0 }, aiAssistedFactor)]); // ai-per-entry: the composer's factor
     setNote('');
     setProject('');
     setAiAssisted(false);
+    setAiAssistedFactor(null);
   };
   // Continue an earlier piece of work: start an additional session pre-filled from an entry.
   const resumeWork = (work, opts) => {
@@ -273,17 +277,27 @@ export default function TimeTracker() {
     const same = (t) => t.client === work.client && t.task === work.task && (t.project || '') === (work.project || '') && (t.note || '').trim() === (work.note || '').trim();
     const on = opts?.copy === true ? null : (activeTimers.find(t => t.runningSince && same(t)) || activeTimers.find(same));
     if (on) {
-      if (on.runningSince) pushToast(`Already running: ${(on.note || '').trim() || on.task}`, 'info');
-      else { resumeTimer(on.id); pushToast(`Resumed: ${(on.note || '').trim() || on.task}`, 'ok'); }
+      // ai-per-entry: a start bar's explicit AI choice ({ applyAi: true }) carries over to the identical
+      // timer it finds, as the Timer page does, so picking AI ×2 never resumes that work without AI.
+      // Continue from an entry passes no such flag and leaves the timer's AI as it is.
+      const carry = opts?.applyAi && work.ai ? (t) => withAiFactor({ ...t, ai: true }, work.aiFactor ?? t.aiFactor) : (t) => t;
+      if (on.runningSince) {
+        if (opts?.applyAi && work.ai) saveActiveTimers(activeTimers.map(t => t.id === on.id ? carry(t) : t));
+        pushToast(`Already running: ${(on.note || '').trim() || on.task}`, 'info');
+      } else {
+        saveActiveTimers(activeTimers.map(t => t.id === on.id ? { ...carry(t), runningSince: Date.now() } : t));
+        pushToast(`Resumed: ${(on.note || '').trim() || on.task}`, 'ok');
+      }
       return;
     }
     if (!passStartGate()) return;
     const ts = Date.now();
-    saveActiveTimers([...activeTimers, { id: newTimerId(), client: work.client, task: work.task, project: work.project || '', note: work.note || '', ai: !!work.ai, startedAt: ts, runningSince: ts, accumulatedMs: 0 }]);
+    saveActiveTimers([...activeTimers, withAiFactor({ id: newTimerId(), client: work.client, task: work.task, project: work.project || '', note: work.note || '', ai: !!work.ai, startedAt: ts, runningSince: ts, accumulatedMs: 0 }, work.aiFactor)]); // ai-per-entry: Continue keeps the work's own factor
     pushToast(`Started: ${work.client} · ${work.task}${work.project ? ' · ' + work.project : ''}`, 'ok');
   };
   // AI can turn out to be the bigger half mid-session, so the flag stays flippable while running.
-  const toggleTimerAi = (id) => saveActiveTimers(activeTimers.map(t => t.id === id ? { ...t, ai: !t.ai } : t));
+  // ai-per-entry: turning AI off drops the timer's own factor.
+  const toggleTimerAi = (id) => saveActiveTimers(activeTimers.map(t => t.id === id ? withAiFactor({ ...t, ai: !t.ai }, t.ai ? null : t.aiFactor) : t));
   const pauseTimer = (id) => saveActiveTimers(activeTimers.map(t => (t.id === id && t.runningSince) ? { ...t, accumulatedMs: timerElapsed(t), runningSince: null } : t));
   const resumeTimer = (id) => saveActiveTimers(activeTimers.map(t => (t.id === id && !t.runningSince) ? { ...t, runningSince: Date.now() } : t));
   const stopTimer = (id) => {
@@ -292,11 +306,11 @@ export default function TimeTracker() {
     const rest = activeTimers.filter(x => x.id !== id);
     const duration = timerElapsed(t);
     if (duration < 1000) { saveActiveTimers(rest); return; }
-    const entry = {
+    const entry = withAiFactor({
       id: 'e_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
       client: t.client, task: t.task, project: t.project || '', note: t.note || '', ai: !!t.ai,
       start: t.startedAt, end: Date.now(), duration,
-    };
+    }, t.aiFactor); // ai-per-entry: the timer's own factor goes onto the entry
     saveEntries([entry, ...entries]);
     saveActiveTimers(rest);
   };
@@ -456,7 +470,7 @@ export default function TimeTracker() {
     const excel = csvFormat === 'excel-sk';
     const sep = excel ? ';' : ',';
     const num = (n, dp = 2) => { const s = Number(n).toFixed(dp); return excel ? s.replace('.', ',') : s; };
-    const rows = [['Date', 'Client', 'Project', 'Task', 'Note', 'Free', 'AI', 'Invoiced', 'Start', 'End', 'Duration (h)', 'Duration (hh:mm:ss)', 'Rounding (min)', 'Billable (h)', 'Rate (€/h)', 'Standard value (€)', 'Earnings net (€)', 'VAT %', 'Earnings with VAT (€)']];
+    const rows = [['Date', 'Client', 'Project', 'Task', 'Note', 'Free', 'AI', 'Invoiced', 'Start', 'End', 'Duration (h)', 'Duration (hh:mm:ss)', 'Rounding (min)', 'Billable (h)', 'Rate (€/h)', 'Standard value (€)', 'Earnings net (€)', 'VAT %', 'Earnings with VAT (€)', 'AI factor']]; // ai-per-entry: new column at the end, old ones stay in place
     [...data].sort((a, b) => b.start - a.start).forEach(e => {
       const rate = getRate(e.client, e.task, rates, clientRates);
       const r = getRounding(e.client, rounding, clientRounding);
@@ -473,6 +487,7 @@ export default function TimeTracker() {
         String(r), num(billableMs / 3600000),
         num(rate), num(standardValue),
         num(earnings), String(entryVat), num(withVat),
+        e.ai ? num(entryAiFactor(e)) : '', // the factor this entry bills at (its own, else the setting)
       ]);
     });
     const body = rows.map(row => row.map(c => `"${String(c).replace(/"/g, '""')}"`).join(sep)).join('\r\n');
@@ -575,6 +590,7 @@ export default function TimeTracker() {
         note: typeof e.note === 'string' ? e.note : '',
         free: !!e.free,
         ai: !!e.ai,
+        ...(e.ai && validAiFactor(e.aiFactor) != null ? { aiFactor: validAiFactor(e.aiFactor) } : {}), // ai-per-entry: keep an entry's own factor
         invoiced: !!e.invoiced,
         start: e.start, end: e.end, duration: e.duration,
       }));
@@ -634,11 +650,12 @@ export default function TimeTracker() {
               project={project} setProject={setProject}
               note={note} setNote={setNote}
               aiAssisted={aiAssisted} setAiAssisted={setAiAssisted}
+              aiAssistedFactor={aiAssistedFactor} setAiAssistedFactor={setAiAssistedFactor} /* ai-per-entry hook */
               onStart={startTimer} onAddManualEntry={openManualEntry}
               recentWork={recentWork} onResumeWork={resumeWork}
               entries={entries} rates={rates} clientRates={clientRates} rounding={rounding} clientRounding={clientRounding}
               onEdit={setEditingEntry} onDelete={confirmDeleteEntry} onNavigate={navigate}
-              onUpdateTimer={(id, patch) => saveActiveTimers(activeTimers.map(t => t.id === id ? { ...t, ...patch } : t))} /* track hook: edit a running timer (same fields, no new keys) */ />
+              onUpdateTimer={(id, patch) => saveActiveTimers(activeTimers.map(t => t.id === id ? { ...t, ...patch } : t))} /* track hook: edit a running timer (same fields; ai-per-entry: plus aiFactor, undefined = Default) */ />
           )}
           {view === 'calendar' && (
             <CalendarView onAddManualEntry={openManualEntry} onNavigate={navigate}

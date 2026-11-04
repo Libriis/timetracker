@@ -1,6 +1,6 @@
 // Pure helpers for the Log: period windows, filtering, per-entry money and totals.
 // Nothing here writes data. Billing math comes from src/lib/billing.js unchanged.
-import { aiAdjusted, billableDuration, billingTotals, calcEarnings, calcStandardValue, getRounding, getVat, round2, vatOf } from '../../lib/billing.js';
+import { aiAdjusted, billableDuration, billingTotals, calcEarnings, calcStandardValue, entryAiFactor, getRounding, getVat, round2, sharedAiFactor, vatOf } from '../../lib/billing.js';
 import { isoDay, UI_LOCALE } from '../../lib/format.js';
 
 const startOfDay = (d) => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; };
@@ -126,8 +126,9 @@ export function entryFigures(e, cfg) {
     vat,
     gross: round2(net + vat),
     billableMs: billableDuration(e, r),
-    // Tracked time after the AI factor, before rounding (shows what AI ×1.5 and rounding each add).
-    aiMs: e.free ? 0 : aiAdjusted(e.duration, e.ai),
+    // Tracked time after the AI factor (the entry's own, else the setting), before rounding
+    // (shows what AI and rounding each add).
+    aiMs: e.free ? 0 : aiAdjusted(e.duration, e.ai, entryAiFactor(e)),
     standard: e.free ? calcStandardValue(e, cfg.rates, cfg.clientRates, cfg.rounding, cfg.clientRounding) : 0,
   };
 }
@@ -162,12 +163,14 @@ export function summarize(list, figsOf, cfg) {
     if (e.invoiced) { s.invoicedCount += 1; invoiced.push(e); } else unbilled.push(e);
     days.add(isoDay(new Date(e.start)));
   }
+  // The AI factor of the billed AI work, for "incl. AI ×1.5"; null when those entries differ.
+  const aiFactor = sharedAiFactor(list.filter(e => !e.free));
   const all = clientMoney(list, cfg);
   const inv = invoiced.length === list.length ? all : invoiced.length ? clientMoney(invoiced, cfg) : { net: 0, vat: 0, gross: 0 };
   const unb = unbilled.length === list.length ? all : unbilled.length ? clientMoney(unbilled, cfg) : { net: 0, vat: 0, gross: 0 };
   return {
     count: s.count, ms: s.ms, billableMs: s.billableMs, dayCount: days.size,
-    aiExtraMs: s.aiExtraMs, roundingMs: s.roundingMs, freeMs: s.freeMs,
+    aiExtraMs: s.aiExtraMs, aiFactor, roundingMs: s.roundingMs, freeMs: s.freeMs,
     net: all.net, vat: all.vat, gross: all.gross,
     invoicedGross: inv.gross, unbilledGross: unb.gross, invoicedCount: s.invoicedCount,
     splitDiff: round2(inv.gross + unb.gross - all.gross),

@@ -1,6 +1,6 @@
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import { AlignLeft, CalendarDays, CircleAlert, Clock3, FileText, Info, Percent, Printer, QrCode, ReceiptText, Sparkles, StickyNote, TriangleAlert } from 'lucide-react';
-import { AI_FACTOR } from '../../lib/billing.js';
+import { sharedAiFactor } from '../../lib/billing.js';
 import { DEFAULT_DESCRIPTIONS } from '../../lib/constants.js';
 import { isoDay, fromIsoDay } from '../../lib/format.js';
 import { buildPDFHTML } from '../../lib/pdf.js';
@@ -104,6 +104,8 @@ export function PDFOptionsModal({ client, entryCount, hasAi: hasAiProp, issuer, 
     [allEntries, dropInvoiced]);
   const docCount = docEntries ? docEntries.length : totalCount;
   const hasAi = docEntries ? docEntries.some(e => e.ai) : !!hasAiProp;
+  // The factor every AI entry on the document shares, or null when they differ.
+  const docAiFactor = useMemo(() => (docEntries ? sharedAiFactor(docEntries) : null), [docEntries]);
 
   // Activity descriptions exist for at least one activity on the document (custom or the defaults).
   const descLang = (pdfInput && pdfInput.descriptions && pdfInput.descriptions[language]) || DEFAULT_DESCRIPTIONS[language] || {};
@@ -310,7 +312,7 @@ export function PDFOptionsModal({ client, entryCount, hasAi: hasAiProp, issuer, 
             <div className="flex gap-2.5 rounded-lg border border-ai/25 bg-ai-soft px-3 py-2.5 text-xs text-fg-muted">
               <Sparkles className="mt-0.5 size-4 shrink-0 text-ai-text" />
               <span>
-                <span className="font-semibold text-ai-text">AI-assisted work bills at ×{AI_FACTOR}.</span> The document shows billed hours only, so tracked time and clock times stay out.
+                <span className="font-semibold text-ai-text">AI-assisted work bills at {docAiFactor != null ? `×${docAiFactor}` : 'each entry’s AI factor'}.</span> The document shows billed hours only, so tracked time and clock times stay out.
               </span>
             </div>
           )}

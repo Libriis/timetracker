@@ -1,7 +1,8 @@
 import { forwardRef, useCallback, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react';
 import { Command as CommandIcon, Maximize2, MoreHorizontal, Play, Plus, Sparkles, X } from 'lucide-react';
-import { AI_FACTOR } from '../../lib/billing.js';
+import { AI_FACTOR, validAiFactor } from '../../lib/billing.js';
 import { cn } from '../../lib/cn.js';
+import { AiFactorPicker } from '../../components/ui/AiFactorPicker.jsx';
 import { Button } from '../../components/ui/Button.jsx';
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '../../components/ui/DropdownMenu.jsx';
 import { Kbd } from '../../components/ui/Kbd.jsx';
@@ -36,11 +37,15 @@ function StartButton({ onStart }) {
 // The timer composer: [ What are you working on?   ● Client · Activity ▾ ] (▶) (⋯)
 // The description field is the main control. Client, activity and project sit in one chip inside it,
 // Start follows right after, and the rare switches (AI ×1.5, manual entry) live in the ⋯ menu.
+// With AI on, the ⋯ menu also picks the next timer's AI factor (aiAssistedFactor, null = Default).
 // Form state lives in App; this component only renders it. The ref exposes focus() for the N shortcut.
 export const TrackPanel = forwardRef(function TrackPanel({
   clients, tasks, selectedClient, setSelectedClient, selectedTask, setSelectedTask, project, setProject, note, setNote,
-  aiAssisted, setAiAssisted, onStart, onAddManualEntry, projectIndex, lastTask, pairs, onOpenPalette, onOpenFocus, canFocus,
+  aiAssisted, setAiAssisted, aiAssistedFactor, setAiAssistedFactor, onStart, onAddManualEntry, projectIndex, lastTask, pairs, onOpenPalette, onOpenFocus, canFocus,
 }, ref) {
+  const aiF = validAiFactor(aiAssistedFactor) ?? AI_FACTOR; // the factor the next timer bills at
+  // AI off also forgets the picked factor: the next time AI goes on, it starts at Default.
+  const setAi = (on) => { setAiAssisted(on); if (!on) setAiAssistedFactor?.(null); };
   const inputRef = useRef(null);
   useImperativeHandle(ref, () => ({ focus: () => inputRef.current?.focus() }), []);
   // The description dominates. When the chip (long client, activity and project) and the AI tag would
@@ -73,7 +78,7 @@ export const TrackPanel = forwardRef(function TrackPanel({
     return () => { alive = false; ro.disconnect(); };
   }, [measure]);
   // New client, activity, project or AI tag: measure again before paint.
-  useLayoutEffect(() => { measure(); }, [measure, selectedClient, selectedTask, project, aiAssisted]);
+  useLayoutEffect(() => { measure(); }, [measure, selectedClient, selectedTask, project, aiAssisted, aiF]);
   const { stacked } = layout;
   const typed = note.trim().length > 0;
   const start = (viaKeyboard) => {
@@ -120,10 +125,10 @@ export const TrackPanel = forwardRef(function TrackPanel({
           )}
           {stacked && <span aria-hidden className="basis-full" />}
           {aiAssisted && (
-            <Tooltip content={`AI-assisted: bills ×${AI_FACTOR} of the tracked time. Click to turn off.`}>
-              <button type="button" data-ai-tag="" onClick={() => setAiAssisted(false)} aria-label={`AI-assisted ×${AI_FACTOR} is on. Turn off`}
+            <Tooltip content={`AI-assisted: bills ×${aiF} of the tracked time. Click to turn off.`}>
+              <button type="button" data-ai-tag="" onClick={() => setAi(false)} aria-label={`AI-assisted ×${aiF} is on. Turn off`}
                 className="group/ai inline-flex h-7 shrink-0 items-center gap-1 rounded-md bg-ai-soft pl-2 pr-1.5 text-xs font-medium text-ai-text outline-none transition-colors hover:bg-ai/15 focus-visible:ring-2 focus-visible:ring-ring/60">
-                <Sparkles className="size-3.5" /> <span className="tnum">AI ×{AI_FACTOR}</span>
+                <Sparkles className="size-3.5" /> <span className="tnum">AI ×{aiF}</span>
                 <X className="size-3 opacity-60 group-hover/ai:opacity-100" />
               </button>
             </Tooltip>
@@ -139,19 +144,25 @@ export const TrackPanel = forwardRef(function TrackPanel({
         </div>
         <StartButton onStart={() => start(false)} />
         <DropdownMenu>
-          <Tooltip content={`More: AI ×${AI_FACTOR}, past entry, search`}>
+          <Tooltip content={`More: AI ×${aiF}, past entry, search`}>
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" size="icon" aria-label="More timer options"><MoreHorizontal /></Button>
             </DropdownMenuTrigger>
           </Tooltip>
           <DropdownMenuContent align="end" className="w-72">
             <DropdownMenuLabel>Next timer</DropdownMenuLabel>
-            <DropdownMenuCheckboxItem checked={aiAssisted} onCheckedChange={(v) => setAiAssisted(!!v)} className="h-auto items-start py-2">
+            {/* Turning AI on keeps the menu open, so the factor picker shows right under the switch. */}
+            <DropdownMenuCheckboxItem checked={aiAssisted} onCheckedChange={(v) => setAi(!!v)} className="h-auto items-start py-2"
+              onSelect={(ev) => { if (!aiAssisted && setAiAssistedFactor) ev.preventDefault(); }}>
               <span className="min-w-0">
-                <span className="flex items-center gap-1.5 font-medium"><Sparkles className="!size-3.5 !text-ai-text" /> AI-assisted, bill ×{AI_FACTOR}</span>
+                <span className="flex items-center gap-1.5 font-medium"><Sparkles className="!size-3.5 !text-ai-text" /> AI-assisted, bill ×{aiF}</span>
                 <span className="mt-0.5 block text-xs text-fg-subtle">For work where AI did part of the job.</span>
               </span>
             </DropdownMenuCheckboxItem>
+            {aiAssisted && setAiAssistedFactor && (
+              <AiFactorPicker menu value={aiAssistedFactor} onChange={setAiAssistedFactor}
+                label="AI factor for the next timer" caption="Factor" />
+            )}
             <DropdownMenuSeparator />
             <DropdownMenuItem onSelect={onAddManualEntry} shortcut="M"><Plus /> Add a past entry by hand</DropdownMenuItem>
             <DropdownMenuItem onSelect={onOpenPalette} shortcut="K"><CommandIcon /> Start recent work…</DropdownMenuItem>

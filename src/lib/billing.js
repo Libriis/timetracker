@@ -10,6 +10,7 @@
  * @property {boolean} [free]      - complimentary work, billed at €0
  * @property {boolean} [invoiced]  - already put on an invoice
  * @property {boolean} [ai]        - AI-assisted, so the tracked time undersells the work (see AI_FACTOR)
+ * @property {number} [aiFactor]  - this entry's own AI factor (1 to 5); missing = follow the setting (see entryAiFactor)
  * @property {number} start        - epoch ms
  * @property {number} end          - epoch ms
  * @property {number} duration     - worked ms (may be < end-start when paused)
@@ -26,6 +27,7 @@
  * @property {number|null} runningSince - epoch ms of the current running segment, or null when paused
  * @property {number} accumulatedMs    - worked ms from completed (un-paused) segments
  * @property {boolean} [ai]            - AI-assisted session; carried onto the entry when stopped
+ * @property {number} [aiFactor]       - this timer's own AI factor; carried onto the entry when stopped
  */
 
 /**
@@ -33,21 +35,30 @@
  * Billable time is the tracked time scaled by this factor — the client buys the result,
  * not the stopwatch. Tracked time is never overwritten, so the flag stays reversible.
  *
- * The factor is a user setting (Settings, stored under tracker:aiFactor, default 1.5) and
- * applies to EVERY AI entry, old and new: changing it re-prices past work too (the user's choice).
+ * The factor is a user setting (Settings, stored under tracker:aiFactor, default 1.5). It is the
+ * DEFAULT: an AI entry or timer may carry its own `aiFactor` (1 to 5) for that one piece of work.
+ * AI work without its own factor follows the setting, old and new: changing the setting re-prices
+ * that past work too (the user's choice). Work with its own factor keeps it.
  * AI_FACTOR is a live ES-module binding: setAiFactor() updates it for every importer, so labels
  * ("AI ×1.5") and every billing calculation follow the setting without passing it around.
+ * Per-item labels and every calculation use entryAiFactor(item), never AI_FACTOR directly.
  */
 export const DEFAULT_AI_FACTOR = 1.5;
 export const MIN_AI_FACTOR = 1;
 export const MAX_AI_FACTOR = 5;
 export let AI_FACTOR = DEFAULT_AI_FACTOR;
 
+/** The factor rounded to two decimals when it is valid (a number from 1 to 5), else null. */
+export function validAiFactor(v) {
+  if (v == null || v === '' || typeof v === 'boolean') return null;
+  const n = Number(v);
+  if (!Number.isFinite(n) || n < MIN_AI_FACTOR || n > MAX_AI_FACTOR) return null;
+  return round2(n);
+}
+
 /** A valid factor (1 to 5, two decimals) or the default for anything else. */
 export function normalizeAiFactor(v) {
-  const n = Number(v);
-  if (!Number.isFinite(n) || n < MIN_AI_FACTOR || n > MAX_AI_FACTOR) return DEFAULT_AI_FACTOR;
-  return round2(n);
+  return validAiFactor(v) ?? DEFAULT_AI_FACTOR;
 }
 
 /** Set the AI factor used by every calculation. Returns the value actually used. */
@@ -56,18 +67,62 @@ export function setAiFactor(v) {
   return AI_FACTOR;
 }
 
-/** Tracked ms scaled for AI assistance. Plain ms when the flag is off. */
-export function aiAdjusted(durationMs, ai) {
-  return ai ? Math.round(durationMs * AI_FACTOR) : durationMs;
+/**
+ * The AI factor one entry or timer bills at: its own valid `aiFactor`, else the setting (AI_FACTOR).
+ * Only meaningful when `ai` is on; the flag decides whether any factor applies at all.
+ */
+export function entryAiFactor(e) {
+  return validAiFactor(e?.aiFactor) ?? AI_FACTOR;
 }
 
 /**
- * The ms a client is charged for: AI factor first, then the rounding block.
- * Scaling before rounding keeps the block boundary meaningful (a 50 min AI session
+ * The same entry or timer with its own AI factor set to `factor`, or without one when `factor` is
+ * null or invalid (it then follows the setting). Only AI work keeps a factor. Returns `x` itself
+ * when nothing changes, so unchanged items keep their identity.
+ */
+export function withAiFactor(x, factor) {
+  const f = x && x.ai ? validAiFactor(factor) : null;
+  if (f == null) {
+    if (!x || !('aiFactor' in x)) return x;
+    const { aiFactor: _drop, ...rest } = x; // eslint-disable-line no-unused-vars
+    return rest;
+  }
+  return x.aiFactor === f ? x : { ...x, aiFactor: f };
+}
+
+/** Data rule for stored items: `aiFactor` only on AI work and only when valid. Others come back as they are. */
+export function tidyAiFactor(x) {
+  return x && 'aiFactor' in x ? withAiFactor(x, x.aiFactor) : x;
+}
+
+/**
+ * The one factor every AI item in `list` bills at, for labels over a set ("incl. AI ×1.5").
+ * null when the AI items differ (say just "AI" then). No AI items: the setting.
+ */
+export function sharedAiFactor(list) {
+  let f = null;
+  for (const e of list || []) {
+    if (!e || !e.ai) continue;
+    const x = entryAiFactor(e);
+    if (f == null) f = x;
+    else if (x !== f) return null;
+  }
+  return f ?? AI_FACTOR;
+}
+
+/** Tracked ms scaled for AI assistance (by `factor`, default the setting). Plain ms when the flag is off. */
+export function aiAdjusted(durationMs, ai, factor = AI_FACTOR) {
+  if (!ai) return durationMs;
+  return Math.round(durationMs * (validAiFactor(factor) ?? AI_FACTOR));
+}
+
+/**
+ * The ms a client is charged for: AI factor first (the entry's own, else the setting), then the
+ * rounding block. Scaling before rounding keeps the block boundary meaningful (a 50 min AI session
  * becomes 75 min, which bills as 1h15 at 15-minute rounding, not 1h30).
  */
 export function billableDuration(entry, roundingMinutes) {
-  return roundedDuration(aiAdjusted(entry.duration, entry.ai), roundingMinutes);
+  return roundedDuration(aiAdjusted(entry.duration, entry.ai, entryAiFactor(entry)), roundingMinutes);
 }
 
 /** Effective hourly rate for a client+task, honouring per-client overrides. */
@@ -138,7 +193,7 @@ export function timerElapsed(t, nowMs = Date.now()) {
 /** Normalise a stored timer to the current shape (id + pause tracking). Migrates legacy records. */
 export function normalizeTimer(tt) {
   const legacy = tt.runningSince === undefined && tt.accumulatedMs === undefined;
-  return {
+  return withAiFactor({
     id: tt.id || ('t_' + (tt.startedAt || Date.now()) + '_' + Math.random().toString(36).slice(2, 6)),
     client: tt.client,
     task: tt.task,
@@ -148,7 +203,7 @@ export function normalizeTimer(tt) {
     startedAt: tt.startedAt,
     runningSince: legacy ? tt.startedAt : (tt.runningSince ?? null),
     accumulatedMs: tt.accumulatedMs || 0,
-  };
+  }, tt.aiFactor); // the timer's own AI factor, when it has a valid one
 }
 
 /**

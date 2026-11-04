@@ -1,7 +1,9 @@
 import { useMemo, useRef, useState } from 'react';
 import { Gift, Plus } from 'lucide-react';
+import { withAiFactor } from '../../lib/billing.js';
 import { cn } from '../../lib/cn.js';
 import { formatHM } from '../../lib/format.js';
+import { AiFactorPicker } from '../../components/ui/AiFactorPicker.jsx';
 import { AiPill } from '../../components/ui/AiToggle.jsx';
 import { Button } from '../../components/ui/Button.jsx';
 import { Combobox } from '../../components/ui/Combobox.jsx';
@@ -23,6 +25,7 @@ export function CreateEntryForm({ draft, clients, tasks, entries, onChangeRange,
   const [project, setProject] = useState('');
   const [note, setNote] = useState('');
   const [ai, setAi] = useState(false);
+  const [aiFactor, setAiFactor] = useState(null); // the entry's own AI factor, null = Default (follow Settings)
   const [free, setFree] = useState(false);
   const [error, setError] = useState('');
   const noteRef = useRef(null);
@@ -57,7 +60,7 @@ export function CreateEntryForm({ draft, clients, tasks, entries, onChangeRange,
     const start = draft.start;
     const end = draft.end;
     if (!(end > start)) { setError('End must be after start.'); return; }
-    onCreate({ id: 'e_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8), client, task, project, note, free, ai, start, end, duration: end - start });
+    onCreate(withAiFactor({ id: 'e_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8), client, task, project, note, free, ai, start, end, duration: end - start }, aiFactor));
   };
 
   if (!clients.length || !tasks.length) {
@@ -102,13 +105,14 @@ export function CreateEntryForm({ draft, clients, tasks, entries, onChangeRange,
           <Input type="time" size="sm" step={900} value={endStr === '24:00' ? '00:00' : endStr} onChange={(e) => setTime('end', e.target.value)} aria-label="End time" className="w-[92px]" />
         </div>
         <div className="flex flex-wrap items-center gap-2 pt-0.5">
-          <AiPill on={ai} onToggle={() => setAi(v => !v)} size="sm" />
+          <AiPill on={ai} factor={aiFactor} onToggle={() => { setAi(v => !v); if (ai) setAiFactor(null); }} size="sm" />
           <button type="button" role="switch" aria-checked={free} onClick={() => setFree(v => !v)}
             className={cn('inline-flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium outline-none transition-colors duration-fast focus-visible:ring-2 focus-visible:ring-ring/60',
               free ? 'border-free/35 bg-free-soft text-free-text' : 'border-line-strong/80 bg-surface text-fg-muted hover:text-fg')}>
             <Gift className={cn('size-3.5', !free && 'text-fg-subtle')} />Free
           </button>
         </div>
+        {ai && <AiFactorPicker value={aiFactor} onChange={setAiFactor} label="AI factor for this entry" />}
         {error && <div role="alert" className="rounded-lg bg-danger-soft px-2.5 py-1.5 text-xs text-danger-text">{error}</div>}
       </div>
       <div className="flex items-center justify-between gap-2 border-t border-line bg-surface-2/60 px-4 py-2.5">

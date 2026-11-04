@@ -1,10 +1,11 @@
 import { useMemo } from 'react';
 import { Play } from 'lucide-react';
-import { billableDuration, billingTotals, getRounding, AI_FACTOR } from '../../lib/billing.js';
+import { billableDuration, billingTotals, getRounding, sharedAiFactor } from '../../lib/billing.js';
 import { cn } from '../../lib/cn.js';
 import { formatClock, formatEUR, formatHM, isoDay, UI_LOCALE } from '../../lib/format.js';
 import { useNow } from '../../lib/useNow.js';
 import { ClientDot } from '../../components/ui/Badge.jsx';
+import { aiLabel } from '../../components/ui/AiFactorPicker.jsx';
 import { Card, SectionLabel } from '../../components/ui/Card.jsx';
 import { Kbd } from '../../components/ui/Kbd.jsx';
 import { Amount } from '../../components/ui/Stat.jsx';
@@ -60,7 +61,7 @@ export function WeekSummary({ entries, timers = [], rates, clientRates, rounding
       if (!e.free) weekBillable += billableDuration(e, getRounding(e.client, rounding, clientRounding));
     }
     const cfg = { rates, clientRates, vat: 0, clientVat: {}, rounding, clientRounding };
-    return { start, days, todayIdx, week, weekBillable, weekEur: billingTotals(wk, cfg).net, unbilledEur: billingTotals(unbilled, cfg).net };
+    return { start, days, todayIdx, week, weekBillable, wk, weekEur: billingTotals(wk, cfg).net, unbilledEur: billingTotals(unbilled, cfg).net };
   }, [entries, rates, clientRates, rounding, clientRounding, day]);
 
   const billing = { rates, clientRates, rounding, clientRounding };
@@ -69,8 +70,10 @@ export function WeekSummary({ entries, timers = [], rates, clientRates, rounding
     const m = timerMoney(t, now, billing);
     liveMs += m.duration;
     liveEur += m.amount;
-    liveBillable += billableDuration({ duration: m.duration, ai: t.ai }, getRounding(t.client, rounding, clientRounding));
+    liveBillable += billableDuration({ duration: m.duration, ai: t.ai, aiFactor: t.aiFactor }, getRounding(t.client, rounding, clientRounding));
   }
+  // "after AI ×1.5": the factor this week's AI work shares, or just "AI" when entries differ.
+  const weekAi = aiLabel(sharedAiFactor([...s.wk, ...timers]));
   const days = s.days.map((ms, i) => (i === s.todayIdx ? ms + liveMs : ms));
   const max = Math.max(...days, 1);
   const today = days[s.todayIdx];
@@ -99,7 +102,7 @@ export function WeekSummary({ entries, timers = [], rates, clientRates, rounding
           <dt className="text-xs text-fg-subtle">Earned, net</dt>
           {/* Five-figure weeks step down a size so the amount never runs into the next column. */}
           <dd className={cn('mt-0.5 font-semibold leading-8 tracking-[-0.01em] text-fg', earned >= 10000 ? 'text-xl' : 'text-2xl')}><Amount value={earned} /></dd>
-          <dd className="mt-0.5 text-xs text-fg-subtle tnum" title={`Hours that bill this week, after AI ×${AI_FACTOR} and rounding`}>{formatHM(s.weekBillable + liveBillable)} billable</dd>
+          <dd className="mt-0.5 text-xs text-fg-subtle tnum" title={`Hours that bill this week, after ${weekAi} and rounding`}>{formatHM(s.weekBillable + liveBillable)} billable</dd>
         </div>
       </dl>
 

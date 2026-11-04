@@ -16,7 +16,7 @@ import { DateRangePicker, rangeOf } from '../../components/ui/DateRangePicker.js
 import { SegmentedControl } from '../../components/ui/SegmentedControl.jsx';
 import { notify } from '../../components/ui/ToastStack.jsx';
 import { Tooltip } from '../../components/ui/Tooltip.jsx';
-import { AI_FACTOR, timerElapsed } from '../../lib/billing.js';
+import { entryAiFactor, timerElapsed, validAiFactor } from '../../lib/billing.js';
 import { cn } from '../../lib/cn.js';
 import { isoDay } from '../../lib/format.js';
 import { readUiPref, writeUiPref } from '../../lib/useMediaQuery.js';
@@ -118,28 +118,33 @@ export function TrackView(props) {
   // Identical work (same client, activity, project and note) never gets a second timer by accident.
   // Paused: it resumes. Running: its card lights up. The keys then act on that timer.
   // Only "Start another copy" in a row's ⋯ menu starts a second copy, on purpose.
-  // `ai`: the composer asked for AI ×1.5, so that timer gets it (in the same save as a resume).
+  // `ai`: the composer asked for AI, so that timer gets it (in the same save as a resume).
+  // `aiFactor`: the composer's own factor for it (null = Default). It also applies when AI is already on.
   // `hint`: one more short sentence for the toast.
-  const takeOver = useCallback((t, { ai = false, hint = '' } = {}) => {
+  const takeOver = useCallback((t, { ai = false, aiFactor = null, hint = '' } = {}) => {
     const title = workTitle(t);
+    const own = ai && onUpdateTimer ? validAiFactor(aiFactor) : null;
     const addAi = ai && !t.ai && (!!onUpdateTimer || !!t.runningSince);
-    if (addAi && onUpdateTimer) onUpdateTimer(t.id, t.runningSince ? { ai: true } : { ai: true, runningSince: Date.now() });
+    const setFactor = own != null && own !== validAiFactor(t.aiFactor);
+    const patch = { ...(addAi ? { ai: true } : {}), ...(setFactor ? { aiFactor: own } : {}) };
+    if ((addAi || setFactor) && onUpdateTimer) onUpdateTimer(t.id, t.runningSince ? patch : { ...patch, runningSince: Date.now() });
     else if (addAi) onToggleAi(t.id);
     else if (!t.runningSince) resumeTimer(t.id);
     setLastPausedId(t.id);
-    const extra = [addAi ? `AI ×${AI_FACTOR} is on now.` : '', hint].filter(Boolean).join(' ');
+    const f = own ?? entryAiFactor(t);
+    const extra = [addAi ? `AI ×${f} is on now.` : setFactor ? `AI ×${f} now.` : '', hint].filter(Boolean).join(' ');
     if (t.runningSince) notify(`Already running: ${title}${extra ? `. ${extra}` : ''}`, 'info');
     else notify(`Resumed: ${title}${extra ? `. ${extra}` : ''}`, 'ok');
     setFlash(f => ({ id: t.id, n: f.n + 1 }));
   }, [onUpdateTimer, onToggleAi, resumeTimer]);
-  const { selectedClient, selectedTask, project, note, setNote, setProject, aiAssisted, setAiAssisted } = props;
+  const { selectedClient, selectedTask, project, note, setNote, setProject, aiAssisted, setAiAssisted, aiAssistedFactor, setAiAssistedFactor } = props;
   const startNew = useCallback(() => guarded('new', () => {
     const live = timersRef.current;
     const t = timerForWork(live, { client: selectedClient, task: selectedTask, project, note });
     if (t) {
       // The composer is used up either way: its note, project and AI tag never carry over to the next timer.
-      takeOver(t, { ai: !!aiAssisted });
-      setNote(''); setProject(''); setAiAssisted?.(false);
+      takeOver(t, { ai: !!aiAssisted, aiFactor: aiAssisted ? aiAssistedFactor : null });
+      setNote(''); setProject(''); setAiAssisted?.(false); setAiAssistedFactor?.(null);
       return;
     }
     if (!note.trim()) {
@@ -149,7 +154,7 @@ export function TrackView(props) {
       if (just) { takeOver(just, { hint: 'Type a description to start another.' }); return; }
     }
     onStart();
-  }), [guarded, onStart, takeOver, selectedClient, selectedTask, project, note, aiAssisted, setNote, setProject, setAiAssisted]);
+  }), [guarded, onStart, takeOver, selectedClient, selectedTask, project, note, aiAssisted, aiAssistedFactor, setNote, setProject, setAiAssisted, setAiAssistedFactor]);
   const startWork = useCallback((w, { copy = false } = {}) => guarded(`${copy ? 'copy' : 'work'}|${workKey(w)}`, () => {
     const t = copy ? null : timerForWork(timersRef.current, w);
     if (t) takeOver(t); else onResumeWork(w, copy ? { copy: true } : undefined);
@@ -194,6 +199,8 @@ export function TrackView(props) {
   }, [activeTimers, lastPausedId, focusOpen, onAddManualEntry, onPause, onResume, onStop]);
 
   const editTimer = onUpdateTimer ? setEditing : undefined;
+  // A running timer's own AI factor (null = Default: follow Settings). Goes through App like any timer edit.
+  const setTimerAiFactor = useCallback((id, f) => onUpdateTimer?.(id, { aiFactor: validAiFactor(f) ?? undefined }), [onUpdateTimer]);
 
   return (
     <div className="min-h-full">
@@ -210,7 +217,8 @@ export function TrackView(props) {
               <span className="text-2xs font-semibold text-fg-subtle tnum">{activeTimers.length}</span>
             </div>
             <ActiveTimersPanel timers={activeTimers} billing={billing} primaryId={primary?.id} flashId={flash.id} flashN={flash.n}
-              onPause={onPause} onResume={onResume} onStop={onStop} onToggleAi={onToggleAi} onFocus={openFocus} onEdit={editTimer} />
+              onPause={onPause} onResume={onResume} onStop={onStop} onToggleAi={onToggleAi} onFocus={openFocus} onEdit={editTimer}
+              onSetAiFactor={onUpdateTimer ? setTimerAiFactor : undefined} />
           </section>
         )}
         <aside className="mb-7 grid content-start gap-4 [grid-area:aside] sm:grid-cols-2 min-[1120px]:sticky min-[1120px]:top-[84px] min-[1120px]:mb-0 min-[1120px]:grid-cols-1 min-[1120px]:self-start min-[1120px]:pt-[26px]">

@@ -1,6 +1,8 @@
-import { ChevronDown, CheckCheck, Tag, Trash2, Undo2, UserRound, X } from 'lucide-react';
+import { Check, ChevronDown, CheckCheck, Sparkles, Tag, Trash2, Undo2, UserRound, X } from 'lucide-react';
 import { motion, useReducedMotion } from 'motion/react';
+import { AI_FACTOR } from '../../../lib/billing.js';
 import { formatClock, formatEUR } from '../../../lib/format.js';
+import { AI_FACTOR_PRESETS } from '../../../components/ui/AiFactorPicker.jsx';
 import { ClientDot } from '../../../components/ui/Badge.jsx';
 import { Button } from '../../../components/ui/Button.jsx';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from '../../../components/ui/DropdownMenu.jsx';
@@ -10,7 +12,9 @@ import { Tooltip } from '../../../components/ui/Tooltip.jsx';
 const Divider = () => <span aria-hidden className="mx-1 h-5 w-px shrink-0 bg-line" />;
 
 // Floating bar for the selected entries: bill them, move them, or delete them.
-export function BulkBar({ count, ms, net, anyInvoiced, anyUnbilled, clients, activities, onInvoiced, onSetClient, onSetActivity, onDelete, onClear }) {
+// AI factor (shown when the selection holds AI entries): set the factor of those AI entries only.
+// aiCurrent: their shared own factor (null = all on Default), undefined when they differ.
+export function BulkBar({ count, ms, net, anyInvoiced, anyUnbilled, clients, activities, onInvoiced, onSetClient, onSetActivity, onDelete, onClear, aiCount = 0, aiCurrent, onSetAiFactor }) {
   const reduce = useReducedMotion();
   return (
     <motion.div role="toolbar" aria-label={`${count} selected entries`}
@@ -48,6 +52,22 @@ export function BulkBar({ count, ms, net, anyInvoiced, anyUnbilled, clients, act
             <DropdownMenuLabel>Change activity to</DropdownMenuLabel>
             {activities.map(t => (
               <DropdownMenuItem key={t} onSelect={() => onSetActivity(t)}>{t}</DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      )}
+      {onSetAiFactor && aiCount > 0 && (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="sm"><Sparkles />AI factor<ChevronDown className="!size-3.5 opacity-60" /></Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="center" side="top">
+            <DropdownMenuLabel>{aiCount === 1 ? 'The selected AI entry' : `The ${aiCount} selected AI entries`}</DropdownMenuLabel>
+            {[null, ...AI_FACTOR_PRESETS].map(f => (
+              <DropdownMenuItem key={f ?? 'default'} onSelect={() => onSetAiFactor(f)} className="tnum">
+                {f == null ? <>Default <span className="text-fg-subtle">(×{AI_FACTOR})</span></> : `×${f}`}
+                {aiCurrent === f && <Check className="ml-auto !text-fg" aria-label="Current" />}
+              </DropdownMenuItem>
             ))}
           </DropdownMenuContent>
         </DropdownMenu>

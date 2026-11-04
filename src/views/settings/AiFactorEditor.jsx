@@ -7,8 +7,9 @@ import { DEFAULT_AI_FACTOR, MAX_AI_FACTOR, MIN_AI_FACTOR } from '../../lib/billi
 
 const PRESETS = [1.25, 1.5, 1.75, 2];
 
-// The AI-assisted billing factor. It applies to every AI entry, past and future (the user's choice),
-// so the note says plainly that totals of earlier work change too.
+// The DEFAULT AI-assisted billing factor. An entry or timer can carry its own factor; every AI entry
+// without one follows this setting, past and future (the user's choice), so the note says plainly
+// that totals of earlier work change too.
 export function AiFactorEditor({ aiFactor, onSaveAiFactor, pushToast, className }) {
   const [local, setLocal] = useState(String(aiFactor));
   useEffect(() => setLocal(String(aiFactor)), [aiFactor]);
@@ -16,7 +17,7 @@ export function AiFactorEditor({ aiFactor, onSaveAiFactor, pushToast, className 
   const save = (n) => {
     if (n === aiFactor) { setLocal(String(aiFactor)); return; }
     onSaveAiFactor(n);
-    pushToast?.(`AI factor set to ×${n}. Every AI-assisted entry now bills at ×${n}.`, 'ok');
+    pushToast?.(`Default AI factor set to ×${n}. AI entries without their own factor now bill at ×${n}.`, 'ok');
   };
   const commit = () => {
     // Accept a decimal comma too ("1,3"), as typed on a Slovak keyboard.
@@ -28,7 +29,7 @@ export function AiFactorEditor({ aiFactor, onSaveAiFactor, pushToast, className 
   return (
     <Card className={className}>
       <CardHeader icon={<Sparkles />} title="AI factor"
-        description="AI-assisted entries bill their tracked time multiplied by this factor." />
+        description="The default for AI-assisted work: tracked time times this factor. An entry or timer can have its own factor." />
       <CardBody>
         <div className="flex flex-wrap items-center gap-2">
           <Input type="text" inputMode="decimal" value={local} aria-label="AI factor"
@@ -41,8 +42,9 @@ export function AiFactorEditor({ aiFactor, onSaveAiFactor, pushToast, className 
           ))}
         </div>
         <p className="mt-2 text-xs text-fg-subtle">
-          From ×{MIN_AI_FACTOR} to ×{MAX_AI_FACTOR}, default ×{DEFAULT_AI_FACTOR}. A change applies to every AI-assisted entry, past and future,
-          so totals of earlier work change too, including work you already invoiced.
+          From ×{MIN_AI_FACTOR} to ×{MAX_AI_FACTOR}, default ×{DEFAULT_AI_FACTOR}. AI entries without their own factor follow this one, past ones too,
+          so their totals change, including work you already invoiced. Entries and timers with their own factor keep it.
+          Set that in the timer&apos;s ⋯ menu or in Edit entry.
         </p>
       </CardBody>
     </Card>
