@@ -5,10 +5,17 @@ import { formatEUR, isoDay } from '../../lib/format.js';
 import { Button } from '../../components/ui/Button.jsx';
 import { Checkbox } from '../../components/ui/Checkbox.jsx';
 import { Modal } from '../../components/ui/Modal.jsx';
+import { readUiPref, writeUiPref } from '../../lib/useMediaQuery.js';
 import { clientMoney } from './logModel.js';
+
+// UI-only preference (never in backups): show the Hours column. Off hides it on screen,
+// in "Copy for Excel" and in the CSV, for invoices where the client should not see hours.
+const SHOW_HOURS_KEY = 'tracker:ui:invoiceLinesShowHours';
 
 export function InvoiceLinesModal({ entries, rates, clientRates, vat, clientVat, rounding, clientRounding, csvFormat, onClose }) {
   const [includeFree, setIncludeFree] = useState(false);
+  const [showHours, setShowHoursState] = useState(() => readUiPref(SHOW_HOURS_KEY, true) !== false);
+  const setShowHours = (v) => { setShowHoursState(v); writeUiPref(SHOW_HOURS_KEY, v); };
   const [copied, setCopied] = useState(false);
   const taRef = useRef(null);
   const excel = csvFormat === 'excel-sk';
@@ -35,8 +42,8 @@ export function InvoiceLinesModal({ entries, rates, clientRates, vat, clientVat,
   };
   const qty = (l) => dec(l.hours, hoursDp(l));
 
-  const header = ['Description', 'Hours', 'Rate (EUR/h)', 'Net (EUR)', 'VAT %', 'Gross (EUR)'];
-  const rows = lines.map(l => [l.desc, qty(l), dec(l.rate), dec(l.net), String(l.vatPct), dec(l.gross)]);
+  const header = ['Description', ...(showHours ? ['Hours'] : []), 'Rate (EUR/h)', 'Net (EUR)', 'VAT %', 'Gross (EUR)'];
+  const rows = lines.map(l => [l.desc, ...(showHours ? [qty(l)] : []), dec(l.rate), dec(l.net), String(l.vatPct), dec(l.gross)]);
   const tsv = [header, ...rows].map(r => r.join('\t')).join('\n');
 
   const copy = async () => {
@@ -62,10 +69,16 @@ export function InvoiceLinesModal({ entries, rates, clientRates, vat, clientVat,
       onClose={onClose}
       footer={(
         <>
-          <label className="mr-auto flex cursor-pointer items-center gap-2 text-sm text-fg-muted">
-            <Checkbox checked={includeFree} onCheckedChange={(v) => setIncludeFree(!!v)} />
-            Include complimentary work as €0 lines
-          </label>
+          <div className="mr-auto flex flex-wrap items-center gap-x-5 gap-y-2">
+            <label className="flex cursor-pointer items-center gap-2 text-sm text-fg-muted">
+              <Checkbox checked={showHours} onCheckedChange={(v) => setShowHours(!!v)} />
+              Show hours
+            </label>
+            <label className="flex cursor-pointer items-center gap-2 text-sm text-fg-muted">
+              <Checkbox checked={includeFree} onCheckedChange={(v) => setIncludeFree(!!v)} />
+              Include complimentary work as €0 lines
+            </label>
+          </div>
           <Button variant="secondary" onClick={(ev) => { if (ev.detail <= 1) exportCSV(); }} disabled={lines.length === 0}><Download /> Export CSV</Button>
           <Button variant="primary" onClick={copy} disabled={lines.length === 0}>
             {copied ? <><Check /> Copied</> : <><Copy /> Copy for Excel</>}
@@ -77,7 +90,7 @@ export function InvoiceLinesModal({ entries, rates, clientRates, vat, clientVat,
           <thead className="border-b border-line bg-surface-2/70">
             <tr className="text-left">
               <th className={th}>Description</th>
-              <th className={`${th} text-right`}>Hours</th>
+              {showHours && <th className={`${th} text-right`}>Hours</th>}
               <th className={`${th} text-right`}>Rate</th>
               <th className={`${th} text-right`}>Net</th>
               <th className={`${th} text-right`}>VAT %</th>
@@ -89,7 +102,7 @@ export function InvoiceLinesModal({ entries, rates, clientRates, vat, clientVat,
             {lines.map((l, i) => (
               <tr key={i} className="hover:bg-surface-2/50">
                 <td className="px-3 py-2.5 text-fg">{l.desc}</td>
-                <td className="whitespace-nowrap px-3 py-2.5 text-right text-fg tnum">{qty(l)} h</td>
+                {showHours && <td className="whitespace-nowrap px-3 py-2.5 text-right text-fg tnum">{qty(l)} h</td>}
                 <td className="whitespace-nowrap px-3 py-2.5 text-right text-fg-subtle tnum">{l.free ? '—' : formatEUR(l.rate)}</td>
                 <td className="whitespace-nowrap px-3 py-2.5 text-right text-fg tnum">{formatEUR(l.net)}</td>
                 <td className="whitespace-nowrap px-3 py-2.5 text-right text-fg-subtle tnum">{l.vatPct}%</td>
@@ -98,14 +111,14 @@ export function InvoiceLinesModal({ entries, rates, clientRates, vat, clientVat,
               </tr>
             ))}
             {lines.length === 0 && (
-              <tr><td colSpan={7} className="px-3 py-8 text-center text-fg-subtle">No billable lines for this filter.</td></tr>
+              <tr><td colSpan={showHours ? 7 : 6} className="px-3 py-8 text-center text-fg-subtle">No billable lines for this filter.</td></tr>
             )}
           </tbody>
           {lines.length > 0 && (
             <tfoot className="border-t border-line-strong bg-surface-2/70 font-semibold">
               <tr>
                 <td className="px-3 py-3 text-fg">Total</td>
-                <td className="whitespace-nowrap px-3 py-3 text-right text-fg tnum">{dec(totalHours)} h</td>
+                {showHours && <td className="whitespace-nowrap px-3 py-3 text-right text-fg tnum">{dec(totalHours)} h</td>}
                 <td></td>
                 <td className="whitespace-nowrap px-3 py-3 text-right text-fg tnum">{formatEUR(totalNet)}</td>
                 <td></td>
